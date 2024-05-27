@@ -1367,7 +1367,7 @@ def _special_dsp_params(
         -1j
         * 2
         * np.pi
-        * np.arange(len(elec_noise_data))
+        * np.arange(len(elec_shot_noise_data))
         * frequency_shift
         / adc_rate
     )
