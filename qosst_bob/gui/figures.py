@@ -41,7 +41,7 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import PySimpleGUI as sg
+import FreeSimpleGUI as sg
 
 from qosst_bob.bob import Bob
 from qosst_bob.utils import heatmap_complex

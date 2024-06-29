@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "qosst-bob"
-version = "0.10.1"
+version = "0.10.2"
 description = "Bob submodule of QOSST, containing modules for Bob client, the GUI, the DSP of Bob and parameters estimation."
 authors = [
     "Yoann Piétri <Yoann.Pietri@lip6.fr>",
@@ -35,9 +35,8 @@ matplotlib = [
     { version = "^3.5.1", python = ">=3.9, <3.11" },
     { version = "^3.7.1", python = ">=3.11, <3.13" },
 ]
-PySimpleGUI = "^4.57.0 "
 scipy = "^1.10"
-
+freesimplegui = "^5.1.0"
 
 [tool.poetry.group.dev.dependencies]
 myst-parser = "^1.0.0"

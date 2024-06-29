@@ -23,7 +23,7 @@ import argparse
 from typing import Union, List, Tuple, Optional
 
 import numpy as np
-import PySimpleGUI as sg
+import FreeSimpleGUI as sg
 import matplotlib
 import matplotlib.pyplot as plt
 
