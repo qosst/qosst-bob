@@ -70,12 +70,12 @@ autoclass_content = "both"
 autodoc_member_order = "bysource"
 
 intersphinx_mapping = {
-    "qosst": ("https://qosst.readthedocs.io/", None),
-    "qosst-core": ("https://qosst-core.readthedocs.io/", None),
-    "qosst-hal": ("https://qosst-hal.readthedocs.io/", None),
-    "qosst-alice": ("https://qosst-hal.readthedocs.io/", None),
-    "qosst-skr": ("https://qosst-skr.readthedocs.io/", None),
-    "qosst-sim": ("https://qosst-sim.readthedocs.io/", None),
+    "qosst": ("https://qosst.readthedocs.io/en/latest/", None),
+    "qosst-core": ("https://qosst-core.readthedocs.io/en/latest/", None),
+    "qosst-hal": ("https://qosst-hal.readthedocs.io/en/latest/", None),
+    "qosst-alice": ("https://qosst-alice.readthedocs.io/en/latest/", None),
+    "qosst-skr": ("https://qosst-skr.readthedocs.io/en/latest/", None),
+    "qosst-sim": ("https://qosst-sim.readthedocs.io/en/latest/", None),
 }
 
 html_logo = "_static/qosst_logo_square_white.png"
