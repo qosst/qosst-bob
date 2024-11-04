@@ -32,6 +32,18 @@
 :prog: qosst-bob-transmittance
 ```
 
+## qosst-bob-offline-dsp
+
+```{warning}
+Offline DSP is an experimental feature.
+```
+
+```{sphinx_argparse_cli}
+:module: qosst_bob.dsp.offline_dsp
+:func: _create_parser
+:prog: qosst-bob-offline-dsp
+```
+
 ## qosst-bob-tools
 
 ```{sphinx_argparse_cli}
