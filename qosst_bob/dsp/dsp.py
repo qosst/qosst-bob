@@ -1024,8 +1024,8 @@ def _dsp_bob_general(
     )
     data_pilots = data[
         approx_zc
-        + 2 * 3989 * sps_approx : approx_zc
-        + 2 * 3989 * sps_approx
+        + 2 * zc_length * sps_approx : approx_zc
+        + 2 * zc_length * sps_approx
         + num_points
     ]
     f_pilot_real_1, f_pilot_real_2 = find_two_pilots(data_pilots, adc_rate, excl=excl)
