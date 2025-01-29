@@ -93,7 +93,7 @@ def recover_tone(
     fir = signal.firwin(fir_size, cutoff / rate) * np.exp(
         1j * 2 * np.pi * np.arange(fir_size) * frequency / rate
     )
-    return signal.fftconvolve(data, fir, mode="same")
+    return signal.oaconvolve(data, fir, mode="same")
 
 
 def find_one_pilot(
@@ -262,10 +262,10 @@ def phase_noise_correction(
     Returns:
         np.ndarray: the array of phase difference.
     """
-    expected_tone = np.exp(
-        1j * 2 * np.pi * np.arange(received_tone.size) * frequency / rate
-    )
-    return np.angle(received_tone) - np.angle(expected_tone)
+    expected_phase = np.fmod(
+        0.5 + np.arange(received_tone.size) * frequency / rate,
+        1.0) * 2 * np.pi - np.pi
+    return np.angle(received_tone) - expected_phase
 
 
 # pylint: disable=too-many-arguments
@@ -293,7 +293,7 @@ def correct_noise(
     Returns:
         np.ndarray: the corrected data.
     """
-    angle_diff = np.unwrap(phase_noise_correction(received_tone, frequency, rate))
+    angle_diff = phase_noise_correction(received_tone, frequency, rate)
     if filter_size:
         # Filter the angle diff
         logger.debug(

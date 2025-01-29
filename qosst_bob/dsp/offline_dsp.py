@@ -117,6 +117,9 @@ def offline_dsp(
 
     logger.info("Applying DSP on elec and elec+shot noise data")
 
+    params.elec_noise_estimation_ratio = config.bob.dsp.elec_noise_estimation_ratio
+    params.elec_shot_noise_estimation_ratio = config.bob.dsp.elec_shot_noise_estimation_ratio
+
     electronic_symbols, electronic_shot_symbols = special_dsp(
         electronic_noise_data, electronic_shot_noise_data, params
     )

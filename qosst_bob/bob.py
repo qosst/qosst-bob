@@ -705,6 +705,8 @@ class Bob:
 
         logger.info("Applying DSP on elec and elec+shot noise data")
 
+        params.elec_noise_ratio = config.bob.dsp.elec_noise_ratio
+        params.elec_shot_noise_ratio = config.bob.dsp.elec_shot_noise_ratio
         self.electronic_symbols, self.electronic_shot_symbols = special_dsp(
             self.electronic_noise.data, self.electronic_shot_noise.data, params
         )

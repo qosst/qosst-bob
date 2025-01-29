@@ -18,6 +18,7 @@
 Modules to resample data (mostly downsample) and associated functions.
 """
 import numpy as np
+from scipy import signal
 
 
 def downsample(
@@ -182,3 +183,72 @@ def _best_sampling_point_float(data: np.ndarray, sps: float) -> int:
             ]
         )
     ).astype(int)
+
+
+def upsample(data: np.ndarray, upsampling_factor: float, order: int) -> np.ndarray:
+    """
+    Upsample data with an upsampling factor of upsampling_factor, and an
+    interpolation of order specified by order.
+
+    Order:
+    - 0: Zero order hold.
+    - 1: Linear interpolation.
+    - >1: Shannon interpolation (invokes scipy.signal.resample).
+
+    Args:
+        data (np.ndarray): the data to upsample.
+        upsampling_factor (float): the upsampling factor.
+        order (int): the order of the interpolation.
+
+    Returns:
+        np.ndarray: upsampled data.
+    """
+    if order == 0:
+        return _upsample_zoh(data, upsampling_factor)
+    elif order == 1:
+        return _upsample_linear_interpolation(data, upsampling_factor)
+    else:
+        return signal.resample(data, int(len(data) * upsampling_factor))
+
+
+def _upsample_zoh(data: np.ndarray, upsampling_factor) -> np.ndarray:
+    """
+    Upsample data without interpolation (zero order hold), with an upsampling
+    factor of upsampling_factor.
+
+    Args:
+        data (np.ndarray): the data to upsample.
+        upsampling_factor (float): the upsampling factor.
+
+    Returns:
+        np.ndarray: upsampled data.
+    """
+    if int(upsampling_factor) == upsampling_factor:
+        return np.repeat(data, int(upsampling_factor))
+    else:
+        n = len(data)
+        source_index = np.arange(int(n * upsampling_factor)) / upsampling_factor
+        _, index_integral = np.modf(source_index)
+        index_integral = index_integral.astype(int)
+        return data[index_integral]
+
+
+def _upsample_linear_interpolation(data: np.ndarray, upsampling_factor) -> np.ndarray:
+    """
+    Upsample data with linear interpolation, with an upsampling factor of
+    upsampling_factor.
+
+    Args:
+        data (np.ndarray): the data to upsample.
+        upsampling_factor (float): the upsampling factor.
+
+    Returns:
+        np.ndarray: upsampled data.
+    """
+    n = len(data)
+    source_index = np.arange(int(n * upsampling_factor)) / upsampling_factor
+    index_fractional, index_integral = np.modf(source_index)
+    index_integral = index_integral.astype(int)
+    x0 = data[index_integral]
+    x1 = data[np.minimum(index_integral + 1, n - 1)]
+    return x0 + (x1 - x0) * index_fractional
