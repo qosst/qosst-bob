@@ -20,7 +20,7 @@
 Main module for the DSP algorithm.
 
 Warning: the DSP _dsp_bob_shared_clock_shared_lo, _dsp_bob_shared_clock_unshared_lo and _dsp_bob_unshared_clock_shared_lo
-are adapated versions of old DSP and might not work. They are untested.
+are adapated versions of old DSP and might not work. There are untested.
 """
 # pylint: disable=too-many-lines
 import logging
@@ -29,7 +29,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.ndimage import uniform_filter1d
-from scipy.signal import oaconvolve, firwin
 
 from qosst_core.configuration import Configuration
 from qosst_core.schema.detection import (
@@ -52,7 +51,6 @@ from .resample import (
     downsample,
     _best_sampling_point_float,
     best_sampling_point,
-    upsample
 )
 
 logger = logging.getLogger(__name__)
@@ -110,11 +108,9 @@ class SpecialDSPParams:
     roll_off: float  #: Roll off of the RRC filter.
     frequency_shift: float  #: Frequency shift of the data, recovered in case clock is not shared and/or LLO setup.
     schema: DetectionSchema  #: Detection schema to know how to interpret the data.
-    elec_noise_estimation_ratio: Optional[float] = 1.0  #: Ratio of electronic noise samples to analyze
-    elec_shot_noise_estimation_ratio: Optional[float] = 1.0  #: Ratio of electronic and shot noise samples to analyze
 
     def __str__(self) -> str:
-        return f"Symbol rate = {self.symbol_rate*1e-6} MBaud, ADC Rate = {self.adc_rate*1e-9} GSamples/s, Roll Off = {self.roll_off}, Frequency shift = {self.frequency_shift*1e-6} MHz, Detection schema = {str(self.schema)}, Ratio of electronic noise samples kept = {self.elec_noise_estimation_ratio}, Ratio of electronic and shot noise samples kept = {self.elec_shot_noise_estimation_ratio}"
+        return f"Symbol rate = {self.symbol_rate*1e-6} MBaud, ADC Rate = {self.adc_rate*1e-9} GSamples/s, Roll Off = {self.roll_off}, Frequency shift = {self.frequency_shift*1e-6} MHz, Detection schema = {str(self.schema)}"
 
 
 def dsp_bob(
@@ -149,19 +145,14 @@ def dsp_bob(
         config.frame.zadoff_chu.rate,
         config.clock.sharing,
         config.local_oscillator.shared,
-        config.bob.dsp.direct_pilot_tracking,
         config.bob.dsp.process_subframes,
         config.bob.dsp.subframes_size,
-        config.bob.dsp.subframes_subdivisions,
         config.bob.dsp.fir_size,
         config.bob.dsp.tone_filtering_cutoff,
         config.bob.dsp.abort_clock_recovery,
         config.bob.dsp.exclusion_zone_pilots,
         config.bob.dsp.pilot_phase_filtering_size,
-        config.bob.dsp.pilot_frequency_filtering_size,
         config.bob.dsp.num_samples_fbeat_estimation,
-        config.bob.dsp.num_samples_pilot_search,
-        config.bob.dsp.symbol_timing_oversampling,
         config.bob.schema,
         config.bob.dsp.debug,
     )
@@ -183,19 +174,14 @@ def dsp_bob_params(
     zc_rate: float,
     shared_clock: bool = False,
     shared_lo: bool = False,
-    direct_pilot_tracking: bool = False,
     process_subframes: bool = False,
     subframe_length: int = 0,
-    subframe_subdivision: int = 1,
     fir_size: int = 500,
     tone_filtering_cutoff: float = 10e6,
     abort_clock_recovery: float = 0,
     excl: Optional[List[Tuple[float, float]]] = None,
     pilot_phase_filtering_size: int = 0,
-    pilot_frequency_filtering_size: int = 0,
     num_samples_fbeat_estimation: int = 100000,
-    num_samples_pilot_search: int = 10_000_000,
-    symbol_timing_oversampling: int = 1,
     schema: DetectionSchema = SINGLE_POLARISATION_RF_HETERODYNE,
     debug: bool = False,
 ) -> Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]:
@@ -217,19 +203,14 @@ def dsp_bob_params(
         zc_rate (float): rate of the Zadoff-Chu sequence.
         shared_clock (bool, optional): if the clock is shared between Alice and Bob. Defaults to False.
         shared_lo (bool, optional): if the local oscillator is shared between Alice and Bob. Defaults to False.
-        direct_pilot_tracking (bool, optional): whether the first pilot can directly be used to estimate beat frequency and phase noise. Defaults to False.
         process_subframes (bool, optional): if the data should be processed at subframes. Defaults to False.
         subframe_length (int, optional): if the previous parameter is True, the length, in samples, of the subframe. Defaults to 0.
-        subframe_subdivision (int, optional): number of subdivisions of each frame for a finer-grained global phase recovery. Defaults to 1.
         fir_size (int, optional): FIR size. Defaults to 500.
         tone_filtering_cutoff (float, optional): cutoff for the FIR filter for the pilot filtering, in Hz.
         abort_clock_recovery (float, optional): Maximal mismatch allowed by the clock recovery algorithm before aborting. If 0, the algorithm never aborts. Defaults to 0.
         excl (Optional[List[Tuple[float, float]]], optional): exclusion zones for the research of pilots (i.e. frequencies where we are sure the pilots are not), given as a list of tuples of float, each elements defining excluded segment (start frequency, stop frequency).
         pilot_phase_filtering_size (int, optional): Size of the uniform1d filter to apply to the phase of the recovered pilots for correction. Defaults to 0.
-        pilot_frequency_filtering_size (int, optional): Size of the uniform1d filter to apply to the frequency of the recovered pilots for correction. Defaults to 0.
         num_samples_fbeat_estimation (int, optional): number of samples to estimate the beat frequency between the two lasers. Defaults to 100000.
-        num_samples_pilot_search (int, optional): number of samples to estimate the frequency of pilots. Defaults to 10000000.
-        symbol_timing_oversampling (int, optional): by which factor the signal is oversampled when searching for the optimal symbol sampling time. Defaults to 1.
         schema (DetectionSchema, optional): detection schema to use for the DSP. Defaults to qosst_core.schema.emission.SINGLE_POLARISATION_RF_HETERODYNE.
         debug (bool, optional): wether to return a debug dict. Defaults to False.
 
@@ -310,32 +291,6 @@ def dsp_bob_params(
             schema=schema,
             debug=debug,
         )
-    if direct_pilot_tracking:
-        return _dsp_bob_direct_pilot_tracking(
-            data,
-            symbol_rate,
-            dac_rate,
-            adc_rate,
-            num_symbols,
-            roll_off,
-            frequency_shift,
-            num_pilots,
-            pilots_frequencies,
-            zc_length,
-            zc_root,
-            zc_rate,
-            subframe_length,
-            subframe_subdivision,
-            fir_size=fir_size,
-            tone_filtering_cutoff=tone_filtering_cutoff,
-            abort_clock_recovery=abort_clock_recovery,
-            excl=excl,
-            pilot_phase_filtering_size=pilot_phase_filtering_size,
-            pilot_frequency_filtering_size=pilot_frequency_filtering_size,
-            symbol_timing_oversampling=symbol_timing_oversampling,
-            num_samples_pilot_search=num_samples_pilot_search,
-            schema=schema,
-            debug=debug)
     return _dsp_bob_general(
         data,
         symbol_rate,
@@ -357,7 +312,6 @@ def dsp_bob_params(
         excl=excl,
         pilot_phase_filtering_size=pilot_phase_filtering_size,
         num_samples_fbeat_estimation=num_samples_fbeat_estimation,
-        num_samples_pilot_search=num_samples_pilot_search,
         schema=schema,
         debug=debug,
     )
@@ -507,7 +461,7 @@ def _dsp_bob_shared_clock_shared_lo(
         )
 
         subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
+            1 / np.sqrt(sps) * np.convolve(subframe_data, filtre[1:], "same")
         )
 
         max_t = _best_sampling_point_int(subframe_data, sps)
@@ -715,7 +669,7 @@ def _dsp_bob_shared_clock_unshared_lo(
         )
 
         subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
+            1 / np.sqrt(sps) * np.convolve(subframe_data, filtre[1:], "same")
         )
 
         max_t = best_sampling_point(subframe_data, sps)
@@ -920,7 +874,7 @@ def _dsp_bob_unshared_clock_shared_lo(
         )
 
         subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
+            1 / np.sqrt(sps) * np.convolve(subframe_data, filtre[1:], "same")
         )
 
         max_t = _best_sampling_point_float(subframe_data, sps)
@@ -982,7 +936,6 @@ def _dsp_bob_general(
     excl: Optional[List[Tuple[float, float]]] = None,
     pilot_phase_filtering_size: int = 0,
     num_samples_fbeat_estimation: int = 100000,
-    num_samples_pilot_search=10_000_000,
     schema: DetectionSchema = SINGLE_POLARISATION_RF_HETERODYNE,
     debug: bool = False,
 ) -> Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]:
@@ -1003,7 +956,7 @@ def _dsp_bob_general(
         - Downsample (per subframe)
         - Correct relative phase noise (per subframe)
 
-    The output has still a global phase difference.
+    The output has stil a global phase difference.
 
     Args:
         data (np.ndarray): data measured by Bob.
@@ -1026,7 +979,6 @@ def _dsp_bob_general(
         excl (Optional[List[Tuple[float, float]]], optional): exclusion zones for the research of pilots (i.e. frequencies where we are sure the pilots are not), given as a list of tuples of float, each elements defining excluded segment (start frequency, stop frequency). Defaults to None.
         pilot_phase_filtering_size (int, optional): size of the uniform1d filter to filter the phase correction. Defaults to 0.
         num_samples_fbeat_estimation (int, optional): number of samples for the estimation of fbeat. Defaults to 100000.
-        num_samples_pilot_search (int, optional): number of samples to estimate the frequency of pilots. Defaults to 10000000.
         schema (DetectionSchema, optional): detection schema to use for the DSP. Defaults to qosst_core.schema.emission.SINGLE_POLARISATION_RF_HETERODYNE.
         debug (bool, optional): if True, the DSPDebug object is returned. Defaults to False.
 
@@ -1043,7 +995,7 @@ def _dsp_bob_general(
     # Find pilot frequency
     if num_pilots < 2:
         logger.error(
-            "General dsp requires two pilots and only one was passed... Aborting",
+            "General dsp requres two pilots and only one was passed... Aborting",
         )
         return None, None, None
 
@@ -1058,22 +1010,24 @@ def _dsp_bob_general(
     f_pilot_1 = pilots_frequencies[0]
     f_pilot_2 = pilots_frequencies[1]
 
-    # Use the base DAC rate if the sample rate of the ZC sequence has not been
-    # provided.
-    if zc_rate == 0:
-        zc_rate = dac_rate
+    # Take a reduce data for ZC and for clock recovery
+
+    # Find the two real frequency
+    # Let's take a smaller part of the signal to compute the difference of frequency of our two pilots
+
+    ratio_approx = 50
+    num_points = 10000000
     sps_approx = int(adc_rate / zc_rate)
-
-    # A first approximate search of the start of the ZC sequence, based on the
-    # signal envelope.
-    uniform_filter_length = int(zc_length * sps_approx)
-    envelope = uniform_filter1d(np.abs(data), uniform_filter_length)
-    approx_zc = int(np.argmax(envelope) - uniform_filter_length / 2)
-
-    # The pilot frequencies are estimated on a large sample
-    # (typically 10M points) taken after the ZC sequence.
-    pilot_start_point = approx_zc + 2 * zc_length * sps_approx
-    data_pilots = data[pilot_start_point:pilot_start_point+num_samples_pilot_search]
+    approx_zc = int(
+        np.argmax(uniform_filter1d(np.abs(data), int(len(data) / ratio_approx)))
+        - int(len(data) / ratio_approx) / 2
+    )
+    data_pilots = data[
+        approx_zc
+        + 2 * zc_length * sps_approx : approx_zc
+        + 2 * zc_length * sps_approx
+        + num_points
+    ]
     f_pilot_real_1, f_pilot_real_2 = find_two_pilots(data_pilots, adc_rate, excl=excl)
     logger.info(
         "Pilots found at %f MHz and %f MHz",
@@ -1111,7 +1065,7 @@ def _dsp_bob_general(
 
     logger.info("Equivalent SPS is %.6f", sps)
 
-    # Find again the real values.
+    # Find again the real values
     f_pilot_real_1, f_pilot_real_2 = find_two_pilots(data, equi_adc_rate, excl=excl)
     logger.info(
         "Pilots found at %f MHz and %f MHz",
@@ -1129,6 +1083,8 @@ def _dsp_bob_general(
         dsp_debug.real_pilot_frequencies = [f_pilot_real_1, f_pilot_real_2]
         dsp_debug.beat_frequency = f_beat
 
+    if zc_rate == 0:
+        zc_rate = dac_rate
     begin_zc, end_zc = synchronisation_zc(
         data * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / equi_adc_rate),
         zc_root,
@@ -1187,7 +1143,7 @@ def _dsp_bob_general(
 
         # Find beat frequency
         f_pilot_real_1 = find_one_pilot(subframe_data, equi_adc_rate, excl=excl)
-        logger.info("Subframe pilot found at %f MHz", f_pilot_real_1 * 1e-6)
+        logger.info("Subframe pilot found at %f", f_pilot_real_1 * 1e-6)
 
         f_beat = f_pilot_real_1 - f_pilot_1
 
@@ -1222,7 +1178,7 @@ def _dsp_bob_general(
         )
 
         subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
+            1 / np.sqrt(sps) * np.convolve(subframe_data, filtre[1:], "same")
         )
 
         max_t = _best_sampling_point_float(subframe_data, sps)
@@ -1278,334 +1234,47 @@ def _dsp_bob_general(
     return result, special_params, dsp_debug
 
 
-# pylint: disable=too-many-statements, too-many-branches
-def _dsp_bob_direct_pilot_tracking(
-    data: np.ndarray,
-    symbol_rate: float,
-    dac_rate: float,
-    adc_rate: float,
-    num_symbols: int,
-    roll_off: float,
-    frequency_shift: float,
-    num_pilots: int,
-    pilots_frequencies: np.ndarray,
-    zc_length: int,
-    zc_root: int,
-    zc_rate: float,
-    subframe_length: int = 50_000,
-    subframe_subdivision: int = 1,
-    fir_size: int = 500,
-    tone_filtering_cutoff: float = 10e6,
-    abort_clock_recovery: float = 0,
-    excl: Optional[List[Tuple[float, float]]] = None,
-    pilot_phase_filtering_size: int = 0,
-    pilot_frequency_filtering_size: int = 0,
-    symbol_timing_oversampling: int = 1,
-    num_samples_pilot_search: int = 1_000_000,
-    schema: DetectionSchema = SINGLE_POLARISATION_RF_HETERODYNE,
-    debug: bool = False,
-) -> Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]:
-    """
-    A less computationally-intensive variant of general DSP.
-
-    It cancels the frequency shift induced by beating, and the phase noise,
-    by directly recovering the phase of the pilot tone. This does not require
-    any tracking of the pilot frequency (apart from a broad estimation of the
-    frequency band in which it belongs).
-
-    The steps are the following:
-        - Find an approximation of the start of the Zadoff-Chu sequence
-        - Extract the frequency of the pilot(s)
-        - Find the Zadoff-Chu sequence
-        - Extract the main pilot (per subframe)
-        - Filter the phase of the pilot (per subframe)
-        - Shift the data to base-band (per subframe)
-        - Apply matched RRC filter (per subframe)
-        - Find the best sampling point( per subframe)
-        - Downsample (per subframe)
-
-    The output still has a global phase difference.
-
-    Args:
-        data (np.ndarray): data measured by Bob.
-        symbol_rate (float): symbol rate in symbols per second.
-        dac_rate (float): DAC rate, in Hz.
-        adc_rate (float): ADC rate, in Hz.
-        num_symbols (int): number of symbols.
-        roll_off (float): roll-off factor for the RRC filter.
-        frequency_shift (float): frequency shift of the quantum symbol, in Hz.
-        num_pilots (int): number of pilots.
-        pilots_frequencies (np.ndarray): list of the frequencies of the pilots.
-        zc_length (int): length of the Zadoff-Chu sequence.
-        zc_root (int): root of the Zadoff-Chu sequence.
-        zc_rate (float): rate of the Zadoff-Chu sequence.
-        subframe_length (int, optional): number of symbols to recover in each subframes. Defaults to 50000.
-        subframe_subdivision (int, optional): number of subdivisions of each frame for a finer-grained global phase recovery. Defaults to 1.
-        fir_size (int, optional): size of the FIR filters. Defaults to 500.
-        tone_filtering_cutoff (float, optional): cutoff, in Hz, for the pilot filtering. Defaults to 10e6.
-        abort_clock_recovery (float, optional): maximal mismatch allowed by the clock recovery algorithm before aborting. If 0, the algorithm never aborts.. Defaults to 0.
-        excl (Optional[List[Tuple[float, float]]], optional): exclusion zones for the research of pilots (i.e. frequencies where we are sure the pilots are not), given as a list of tuples of float, each elements defining excluded segment (start frequency, stop frequency). Defaults to None.
-        pilot_phase_filtering_size (int, optional): size of the uniform1d filter to filter the phase correction. Defaults to 0.
-        pilot_frequency_filtering_size (int, optional): size of the uniform1d filter to filter the phase correction. Defaults to 0.
-        symbol_timing_oversampling (int, optional): by which factor the signal is oversampled when searching for the optimal symbol sampling time. Defaults to 1.
-        num_samples_pilot_search (int, optional): number of samples to estimate the frequency of pilots. Defaults to 10000000.
-        schema (DetectionSchema, optional): detection schema to use for the DSP. Defaults to qosst_core.schema.emission.SINGLE_POLARISATION_RF_HETERODYNE.
-        debug (bool, optional): if True, the DSPDebug object is returned. Defaults to False.
-
-    Returns:
-        Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]: list of np.ndarray, each one corresponding to the recovered symbols for a subframe, SpecialDSPParams object to give to the special dsp, and DSPDebug object if debug was true.
-    """
-    logger.info("Starting General DSP with direct pilot tracking")
-    if debug:
-        logger.info("Debug mode is on.")
-        dsp_debug = DSPDebug()
-    else:
-        dsp_debug = None
-
-    # Find pilot frequency
-    if num_pilots < 1:
-        logger.error("At least one pilot is required... Aborting")
-        return None, None, None
-
-    if num_pilots > 2:
-        logger.warning(
-            "More than 2 pilots were given but only two are necessary for recovery with unshared clock and unshared LO. Taking the two first pilots (%.2f MHz, %.2f MHz)",
-            pilots_frequencies[0] * 1e-6,
-            pilots_frequencies[1] * 1e-6,
-        )
-
-    f_pilot_1 = pilots_frequencies[0]
-
-    # Convert the data to float32
-    data = data.astype('f')
-
-    # Use the base DAC rate if the sample rate of the ZC sequence has not been
-    # provided.
-    if zc_rate == 0:
-        zc_rate = dac_rate
-    zc_oversampling = int(adc_rate / zc_rate)
-
-    logger.info("Computing envelope for approximate ZC search")
-    envelope = np.abs(data[::zc_oversampling])
-    envelope = uniform_filter1d(envelope, zc_length)
-    preamble_zc_start = (np.argmax(envelope) - zc_length // 2) * zc_oversampling
-
-    # The pilot frequencies are estimated on a large sample
-    # (typically 10M points) taken after the ZC sequence.
-    pilot_start_point = preamble_zc_start + 2 * zc_length * zc_oversampling
-    data_pilots = data[pilot_start_point:pilot_start_point+num_samples_pilot_search]
-
-    if num_pilots == 2:
-        f_pilot_2 = pilots_frequencies[1]
-        logger.info("Searching for pilots")
-        f_pilot_real_1, f_pilot_real_2 = find_two_pilots(data_pilots, adc_rate, excl=excl)
-        logger.info(
-            "Pilots found at %f MHz and %f MHz",
-            f_pilot_real_1 * 1e-6,
-            f_pilot_real_2 * 1e-6,
-            )
-
-        # Measure the clock difference
-        delta_f = (f_pilot_real_2 - f_pilot_real_1) / (f_pilot_2 - f_pilot_1)
-        logger.info(
-            "Tone difference : %.6f (expected value : %.2f)",
-            (f_pilot_real_2 - f_pilot_real_1) * 1e-6,
-            (f_pilot_2 - f_pilot_1) * 1e-6,
-        )
-        logger.info("Difference of clock is estimated at %.6f", delta_f)
-
-        if abort_clock_recovery != 0 and np.abs(1 - delta_f) > abort_clock_recovery:
-            logger.warning(
-                "Clock recovery algorithm aborted due to too high mismatch (%f > %f). Taking adc_rate as real adc_value.",
-                np.abs(1 - delta_f),
-                abort_clock_recovery,
-            )
-            equi_adc_rate = adc_rate
-        else:
-            logger.debug("Clock mismatch was accepted.")
-            equi_adc_rate = adc_rate / delta_f
-
-        if dsp_debug:
-            dsp_debug.equi_adc_rate = equi_adc_rate
-            dsp_debug.delta_frequency_pilots = delta_f
-            dsp_debug.real_pilot_frequencies = [f_pilot_real_1, f_pilot_real_2]
-    else:
-        # Only one pilot found, so we assume that the ADC rate perfectly
-        # matches the specified value.
-        equi_adc_rate = adc_rate
-
-        logger.info("Searching for the pilot")
-        f_pilot_real_1 = find_one_pilot(data_pilots, equi_adc_rate, excl=excl)
-        dsp_debug.real_pilot_frequencies = [f_pilot_real_1]
-
-    # Correct estimates with true ADC rate (if estimated).
-    f_pilot_1 *= equi_adc_rate / adc_rate
-    sps = equi_adc_rate / symbol_rate
-    f_beat = f_pilot_real_1 - f_pilot_1
-
-    logger.info("Equivalent ADC rate is %.6f MHz", equi_adc_rate * 1e-6)
-    logger.info("Equivalent SPS is %.6f", sps)
-
-    if dsp_debug:
-        dsp_debug.beat_frequency = f_beat
-
-    logger.info('Searching for start of the ZC sequence')
-    zc_search_start = max(preamble_zc_start - 4 * zc_length * zc_oversampling, 0)
-    zc_search_end = zc_search_start + 8 * zc_length * zc_oversampling
-    data_zc = data[zc_search_start:zc_search_end]
-    shift = np.exp(-1j * 2 * np.pi * np.arange(len(data_zc)) * f_beat / equi_adc_rate)
-    begin_zc, end_zc = synchronisation_zc(
-        data_zc * shift, zc_root, zc_length,
-        resample=equi_adc_rate / zc_rate)
-    begin_zc += zc_search_start
-    end_zc += zc_search_start
-
-    begin_data = end_zc
-    end_data = int(
-        begin_data + num_symbols * np.ceil(sps + 1)
-    )  # We take a bit more of what is needed to be sure to have all symbols
-    useful_data = data[begin_data:end_data]
-
-    if dsp_debug:
-        dsp_debug.begin_zadoff_chu = begin_zc
-        dsp_debug.end_zadoff_chu = end_zc
-        dsp_debug.begin_data = begin_data
-        dsp_debug.end_data = end_data
-        dsp_debug.tones = []
-        dsp_debug.uncorrected_data = []
-
-    begin_subframe = 0
-    end_subframe = int(np.ceil(subframe_length * (sps + 1) - 0.5))
-    result = []
-    num_symbols_recovered = 0
-
-    # Number of samples to include from the previous subframe to account for
-    # the boundary conditions of the filters.
-    num_samples_previous_subframe = max(pilot_phase_filtering_size, fir_size)
-
-    # Pre-compute the RRC filter.
-    _, rrc_filter = root_raised_cosine_filter(
-        int(10 * sps + 2),
-        roll_off,
-        1 / symbol_rate,
-        equi_adc_rate,
-    )
-    rrc_filter = (rrc_filter[1:] / np.sqrt(sps)).astype(np.complex64)
-
-    # Pre-compute the complex exponential for shifting.
-    shift_size = subframe_length * (sps + 1) + num_samples_previous_subframe
-    shift_up = np.exp(
-        1j
-        * 2
-        * np.pi
-        * np.arange(shift_size)
-        * (f_pilot_1 - frequency_shift)
-        / equi_adc_rate
-    ).astype(np.complex64)
-
-    # Pre-compute the filter extracting the pilot tone.
-    pilot_bp_filter = (firwin(fir_size, tone_filtering_cutoff / equi_adc_rate) * np.exp(
-        1j * 2 * np.pi * np.arange(fir_size) * f_pilot_real_1 / equi_adc_rate
-    )).astype(np.complex64)
-
-    while num_symbols_recovered < num_symbols:
-        # Include more samples to account for the boundary condition of filters.
-        begin_extended_subframe = max(
-            begin_subframe - num_samples_previous_subframe, 0
-        )
-        subframe_data = useful_data[begin_extended_subframe:end_subframe].astype(np.complex64)
-
-        logger.info("Recovering first pilot tone")
-        pilot_data = oaconvolve(subframe_data, pilot_bp_filter, mode="same")
-        pilot_angle = np.angle(pilot_data)
-
-        if pilot_phase_filtering_size > 1 or pilot_frequency_filtering_size > 1:
-            logger.info("Filtering pilot")
-            # The unwrapped angle can grow into a large number, but the full
-            # precision is needed. Convert to double.
-            pilot_angle = np.unwrap(pilot_angle.astype('d'))
-            if pilot_phase_filtering_size > 1:
-                pilot_angle = uniform_filter1d(
-                    pilot_angle,
-                    pilot_phase_filtering_size
-                )
-            if pilot_frequency_filtering_size > 1:
-                pilot_angle = np.cumsum(uniform_filter1d(
-                    np.diff(pilot_angle, append=pilot_angle[-1]),
-                    pilot_frequency_filtering_size)
-                )
-        clean_pilot = np.exp(-1j * pilot_angle).astype(np.complex64)
-
-        logger.info("Cancelling phase noise and shifting quantum data to baseband")
-        subframe_data *= clean_pilot
-        subframe_data *= shift_up[:len(subframe_data)]
-
-        logger.info("Applying RRC filter")
-        subframe_data = oaconvolve(subframe_data, rrc_filter, "same")
-
-        # Ignore the extra samples at the beginning of the frame
-        subframe_data = subframe_data[begin_subframe - begin_extended_subframe:]
-
-        logger.info("Finding best decision point")
-        if symbol_timing_oversampling != 1:
-            subframe_data = upsample(subframe_data, symbol_timing_oversampling, 2)
-
-        best_t = _best_sampling_point_float(
-            subframe_data,
-            sps * symbol_timing_oversampling
-        )
-        best_grid = np.round(
-            best_t + sps * symbol_timing_oversampling * np.arange(
-                subframe_length)
-        ).astype(int)
-
-        logger.info("Downsampling")
-        subframe_data = subframe_data[best_grid]
-        last_index = begin_subframe + best_grid[-1] / symbol_timing_oversampling
-
-        logger.info("Collecting %i symbols in the frame", len(subframe_data))
-        chunk_length = len(subframe_data) // subframe_subdivision
-        for i in range(subframe_subdivision):
-            start = i * chunk_length
-            if i != subframe_subdivision - 1:
-                result.append(subframe_data[start:start + chunk_length])
-            else:
-                result.append(subframe_data[start:])
-        num_symbols_recovered += len(subframe_data)
-
-        begin_subframe = int(last_index + sps / 2 - 0.5)
-        end_subframe = int(begin_subframe + subframe_length * (sps + 1) - 0.5)
-
-    special_params = SpecialDSPParams(
-        symbol_rate=symbol_rate,
-        adc_rate=equi_adc_rate,
-        roll_off=roll_off,
-        frequency_shift=frequency_shift + f_beat,
-        schema=schema,
-    )
-    return result, special_params, dsp_debug
-
-
 def find_global_angle(
-    received_data: np.ndarray,
-    sent_data: np.ndarray) -> Tuple[float, float]:
+    received_data: np.ndarray, sent_data: np.ndarray, precision: float = 0.001
+) -> Tuple[float, float]:
     """
-    Find the global angle between received and sent data.
+    Find global angle between received and sent data by exhaustive search.
 
-    The best angle is found when the real part of the covariance is the highest
+    The best angle is found when the real part of the covariance is the highset
     between the two sets.
+    A certain number of angles will be tested to statisfy the required precision.
+    In fact the number of tested points will ceil(2*pi/precision) with an actual
+    precision of 2*pi/(number of points) with a precision lower or equal to the
+    targeted precision.
+
+    The returned value is an angle in radian, between -pi and pi.
 
     Args:
         received_data (np.ndarray): the symbols received by Bob after the DSP.
         sent_data (np.ndarray): the send symbols by Alice.
+        precision (float, optional): the precision wanted on the angle, in radians. Defaults to 0.001.
 
     Returns:
         Tuple[float,float]: the angle that maximises the covariance, in radians, and the maximal covariance.
     """
-    stack = np.stack((sent_data, received_data), axis=0)
-    cov = np.cov(stack)[0][1]
-    max_angle = np.angle(cov)
-    max_cov = (cov * np.exp(-1j * max_angle)).real
+    number_of_points = int(np.ceil(2 * np.pi / precision))
+    angles = np.linspace(-np.pi, np.pi, number_of_points)
+
+    logger.debug(
+        "Finding global angle with step of %f rad (targeted presicision %f rad).",
+        angles[1] - angles[0],
+        precision,
+    )
+
+    max_angle = 0
+    max_cov = 0
+    for angle in angles:
+        stack = np.stack((sent_data, received_data * np.exp(1j * angle)), axis=0)
+        cov = np.cov(stack)
+        if cov[0][1].real > max_cov:
+            max_angle = angle
+            max_cov = cov[0][1].real
+
     logger.debug(
         "Global angle found : %.2f rad with covariance : %.2f", max_angle, max_cov
     )
@@ -1628,7 +1297,7 @@ def special_dsp(
     Returns:
         Tuple[np.ndarray, np.ndarray]: the electronic symbols and electronic and shot symbols.
     """
-    logger.info("Preparing special DSP with following parameters: %s", str(params))
+    logger.info("Preparing special DSP with following paramaters: %s", str(params))
     return _special_dsp_params(
         elec_noise_data[0],
         elec_shot_noise_data[0],
@@ -1637,40 +1306,7 @@ def special_dsp(
         params.roll_off,
         params.frequency_shift,
         params.schema,
-        params.elec_noise_estimation_ratio,
-        params.elec_shot_noise_estimation_ratio
     )
-
-
-def _subsample(data: np.ndarray, ratio: float, position: str) -> np.ndarray:
-    """
-    Extract a contiguous subsample of an array, the size of which is a
-    ratio of the original array length.
-
-    The position string describes from where the samples should be taken:
-    * 'h' or 'head' for the beginning of the data.
-    * 'm' or 'middle' for the middle of the data.
-    * 't' or 'tail' for the end of the data.
-
-    Args:
-        data (np.ndarray): array from which to extract the subsample
-        ratio (float): ratio of sizes between the subsample and original array
-        position (str): 'head', 'middle' or 'tail'
-    """
-    n = len(data)
-
-    if position in ['m', 'middle']:
-        index_from = int(n / 2 * (1 - ratio))
-        index_to = int(n / 2 * (1 + ratio))
-    elif position in ['h', 'head']:
-        index_from = 0
-        index_to = int(n * ratio)
-    elif position in ['t', 'tail']:
-        index_from = int(n * (1 - ratio))
-        index_to = n
-    else:
-        raise ValueError(f"position must be one of 'head', 'middle' or 'tail' (got '{ position }')")
-    return data[index_from:index_to]
 
 
 def _special_dsp_params(
@@ -1681,11 +1317,10 @@ def _special_dsp_params(
     roll_off: float,
     frequency_shift: float,
     _schema: DetectionSchema,
-    elec_noise_estimation_ratio: float,
-    elec_shot_noise_estimation_ratio: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Special DSP to apply on the electronic and electronic and shot noise samples
+    Special DSP to apply the electronic and electronic and shot noises
+    taking the parameters.
 
     Args:
         elec_noise_data (np.ndarray): array of the electronic noise.
@@ -1695,8 +1330,6 @@ def _special_dsp_params(
         roll_off (float): roll-off factor of the RRC filter.
         frequency_shift (float): frequency shift of the quantum data, in Hz.
         schema (DetectionSchema): schema to know how to interpret the data.
-        elec_noise_estimation_ratio (float): proportion of electronic noise samples to keep for estimation.
-        elec_shot_noise_estimation_ratio (float): proportion of electronic and shot noise samples to keep for estimation.
 
     Returns:
         Tuple[np.ndarray, np.ndarray]: the electronic symbols and electronic and shot symbols.
@@ -1704,46 +1337,46 @@ def _special_dsp_params(
     logger.info("Starting DSP on elec and elec+shot noise.")
 
     sps = adc_rate / symbol_rate
-
-    # For efficiency reasons, the DSP on this section is performed
-    # on float32s/complex64s.
-    elec_noise_data = _subsample(elec_noise_data, elec_noise_estimation_ratio, 'tail')
-    elec_noise_data = elec_noise_data.astype(np.complex64)
-    n_elec_noise_data = len(elec_noise_data)
-
-    elec_shot_noise_data = _subsample(elec_shot_noise_data, elec_shot_noise_estimation_ratio, 'tail')
-    elec_shot_noise_data = elec_shot_noise_data.astype(np.complex64)
-    n_elec_shot_noise_data = len(elec_shot_noise_data)
-
-    # Precompute the filter and complex exponential for shifting.
-    _, rrc_filter = root_raised_cosine_filter(
+    _, filtre = root_raised_cosine_filter(
         int(10 * sps + 2),
         roll_off,
         1 / symbol_rate,
         adc_rate,
     )
-    rrc_filter = rrc_filter[1:].astype('f')
 
-    n_shift = max(n_elec_noise_data, n_elec_shot_noise_data)
-    shift = np.exp(
+    logger.info("Starting DSP on elec noise.")
+    elec_noise_bb = elec_noise_data * np.exp(
         -1j
         * 2
         * np.pi
-        * np.arange(n_shift)
+        * np.arange(len(elec_noise_data))
         * frequency_shift
-        / adc_rate).astype(np.complex64)
-
-    logger.info("Starting DSP on elec noise.")
-    elec_noise_bb = elec_noise_data * shift[:n_elec_noise_data]
-    elec_noise_filtered = (
-        1 / np.sqrt(sps) * oaconvolve(elec_noise_bb, rrc_filter, "same")
+        / adc_rate
     )
+
+    # RRC filter
+    elec_noise_filtered = (
+        1 / np.sqrt(sps) * np.convolve(elec_noise_bb, filtre[1:], "same")
+    )
+
+    elec_symbols = downsample(elec_noise_filtered, 0, sps)
+
     logger.info("Starting DSP on elec+shot noise.")
 
-    elec_shot_noise_bb = elec_shot_noise_data * shift[:n_elec_shot_noise_data]
-    elec_shot_noise_filtered = (
-        1 / np.sqrt(sps) * oaconvolve(elec_shot_noise_bb, rrc_filter, "same")
+    elec_shot_noise_bb = elec_shot_noise_data * np.exp(
+        -1j
+        * 2
+        * np.pi
+        * np.arange(len(elec_shot_noise_data))
+        * frequency_shift
+        / adc_rate
     )
-    logger.info("DSP on elec and elec+shot noise finished.")
 
-    return elec_noise_filtered, elec_shot_noise_filtered
+    # RRC filter
+    elec_shot_noise_filtered = (
+        1 / np.sqrt(sps) * np.convolve(elec_shot_noise_bb, filtre[1:], "same")
+    )
+    elec_shot_symbols = downsample(elec_shot_noise_filtered, 0, sps)
+
+    logger.info("DSP on elec and elec+shot noise finished.")
+    return elec_symbols, elec_shot_symbols

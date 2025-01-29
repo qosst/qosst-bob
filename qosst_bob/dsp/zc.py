@@ -27,8 +27,6 @@ from scipy.ndimage import uniform_filter1d
 
 from qosst_core.comm.zc import zcsequence
 
-from .resample import upsample
-
 logger = logging.getLogger(__name__)
 
 
@@ -72,33 +70,26 @@ def synchronisation_zc(
     logger.debug(
         "Computing rolling average to get approximation of Zadoff-Chu location."
     )
-
-    uniform_filter_length = int(zc_length * resample)
-    envelope = uniform_filter1d(np.abs(data), uniform_filter_length)
-    approx_zc = int(np.argmax(envelope) - uniform_filter_length / 2)
+    approx_zc = int(
+        np.argmax(uniform_filter1d(np.abs(data), int(len(data) / ratio_approx)))
+        - int(len(data) / ratio_approx) / 2
+    )
     logger.debug("Approximative position found at %i.", approx_zc)
     zadoff_chu = zcsequence(zc_root, zc_length)
-    # Resample to the correct size using a zero order hold.
-    zadoff_chu = upsample(zadoff_chu, resample, 0)
-
-    n = len(zadoff_chu)
+    zadoff_chu = np.repeat(zadoff_chu, int(resample))
     logger.debug(
         "Upsampling sequence with resample value %f. New length is %i",
         resample,
-        n,
+        len(zadoff_chu),
     )
-
-    xcorr_start_point = max(approx_zc - 2 * n, 0)
-    xcorr_end_point = min(approx_zc + 2 * n, len(data))
-    data_zc = data[xcorr_start_point:xcorr_end_point]
+    data_zc = data[approx_zc - 2 * len(zadoff_chu) : approx_zc + 2 * len(zadoff_chu)]
     lags = signal.correlation_lags(len(data_zc), len(zadoff_chu), mode="same")
     if use_abs:
         xcorr = signal.correlate(np.abs(data_zc), np.abs(zadoff_chu), mode="same")
     else:
         xcorr = signal.correlate(data_zc, zadoff_chu, mode="same")
 
-    beginning_zc = lags[np.argmax(xcorr)] + xcorr_start_point
-    end_zc = len(zadoff_chu) + beginning_zc
-
-    logger.debug("Beginning was found at %i and end at %i", beginning_zc, end_zc)
-    return beginning_zc, end_zc
+    begin_zc = lags[np.argmax(xcorr)] + approx_zc - 2 * len(zadoff_chu)
+    end_zc = len(zadoff_chu) + begin_zc
+    logger.debug("Begin was found at %i and end at %i", begin_zc, end_zc)
+    return begin_zc, end_zc
