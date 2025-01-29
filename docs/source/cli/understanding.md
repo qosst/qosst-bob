@@ -76,6 +76,24 @@ qosst-bob-optimize -f config.toml -vv -n 5 roll-off 0 1 0.01
 
 For each frame, the values of the estimated parameters are saved and at the end of the script saved in a {py:class}`~qosst_bob.data.OptimizationResults` container.
 
+## qosst-bob-offline-dsp
+
+```{warning}
+Offline DSP is an experimental feature.
+```
+
+This script allows to run the DSP of Bob without having to run Alice and Bob. The script requires, at least, the data of the acquisition, the electronic noise data, the electronic and shot noise data, the symbols of Alice and the average number of photons per symbol at Alice's side. These are the position arguments.
+
+Optional arguments include the configuration file (for Bob), the verbosity and if the data should be saved.
+
+An example of usage is
+
+```{prompt} bash
+python3 offline_dsp.py -f config.toml -vv signal.npy elec.npy elec_shot.npy symbols.npy 5
+```
+
+QOSST is made such that the exported data from the GUI or Bob's client can be fed directly to this script.
+
 ## qosst-bob-tools
 
 The last command line interface is for tools for Bob. Currently two tools are available: `eta-voltage` and `eta_current` that can be used for the calibration of eta (see {doc}`here <../understanding/calibration>` for more information).
