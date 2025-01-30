@@ -37,10 +37,7 @@ def synchronisation_zc(
     data: np.ndarray,
     zc_root: int,
     zc_length: int,
-    resample: float = 1,
-    use_abs=True,
-    ratio_approx=50,
-) -> Tuple[int, int]:
+    resample: float = 1) -> Tuple[int, int]:
     """
     Find the beginning of a Zadoff-Chu sequence in data.
 
@@ -50,16 +47,17 @@ def synchronisation_zc(
 
     From version 0.4.27, the behavior of this function is a little different:
 
-    first we find a first approximate of the Zadoff-Chu location by making
-    a rolling average of the data, and then, we make the cross-correlation
-    around this point.
+    First we find a first approximate of the Zadoff-Chu location by computing
+    the correlation of the envelope of the signal and the envelope of the ZC
+    (which is a rectangle function). A more computationally expensive, but
+    accurate, search is then performed by cross-correlating the signal with
+    the ZC sequence.
 
     Args:
         data (np.ndarray): the data from where the Zadoff-Chu should be found.
         zc_root (int): the root of the Zadoff-Chu sequence.
         zc_length (int): the length of the Zadoff-Chu sequence.
         resample (float, optional): the optional resample to apply to the Zadoff-Chu sequence. Defaults to 1.
-        ratio_approx (int, optional): the length of the data will be divided by this value to get the window size of the rolling average for the approximation. Defaults to 50.
 
     Returns:
         Tuple[int, int]: tuple including the beginning and the end of the Zadoff-Chu sequence.
@@ -92,13 +90,27 @@ def synchronisation_zc(
     xcorr_end_point = min(approx_zc + 2 * n, len(data))
     data_zc = data[xcorr_start_point:xcorr_end_point]
     lags = signal.correlation_lags(len(data_zc), len(zadoff_chu), mode="same")
-    if use_abs:
-        xcorr = signal.correlate(np.abs(data_zc), np.abs(zadoff_chu), mode="same")
-    else:
-        xcorr = signal.correlate(data_zc, zadoff_chu, mode="same")
+    xcorr = np.abs(signal.correlate(data_zc, zadoff_chu, mode="same"))
 
     beginning_zc = lags[np.argmax(xcorr)] + xcorr_start_point
     end_zc = len(zadoff_chu) + beginning_zc
+
+    if False:
+        # Debugging code
+        from matplotlib import pyplot as plt
+        center = beginning_zc - xcorr_start_point
+        plt.figure(figsize=(10, 6))
+        plt.subplot(3, 1, 1)
+        plt.plot(lags, xcorr)
+        plt.subplot(3, 1, 2)
+        N = 1000
+        plt.plot(np.abs(data_zc[center-N:center+N]))
+        plt.stem(N, max(np.abs(data_zc)), 'r')
+        plt.subplot(3, 1, 3)
+        center = end_zc - xcorr_start_point 
+        plt.plot(np.abs(data_zc[center-N:center+N]))
+        plt.stem(N, max(np.abs(data_zc)), 'r')
+        plt.show()
 
     logger.debug("Beginning was found at %i and end at %i", beginning_zc, end_zc)
     return beginning_zc, end_zc
