@@ -64,8 +64,6 @@ def offline_dsp(
     warnings.warn("Offline DSP is experimental.")
     logger.info("Starting offline DSP")
 
-    data = data[0]
-
     if config.bob.switch.switching_time:
         end_electronic_shot_noise = int(
             config.bob.switch.switching_time * config.bob.adc.rate
@@ -92,7 +90,6 @@ def offline_dsp(
         alice_symbols = all_alice_symbols[indices]
 
         # Find global angle
-
         angle, cov = find_global_angle(
             frame[indices - (last_indice + 1)], alice_symbols
         )
@@ -184,11 +181,16 @@ def main():
     configuration = Configuration(args.file)
 
     # Load data and symbols
-    electronic_noise_data = np.load(args.elec_data)
-    electronic_shot_noise_data = np.load(args.elec_shot_data)
+    electronic_noise_data = np.load(args.elec_data, allow_pickle=True)
+    if args.elec_data.endswith('.qosst'):
+        electronic_noise_data = electronic_noise_data.data[0]
+    electronic_shot_noise_data = np.load(args.elec_shot_data, allow_pickle=True)
+    if args.elec_shot_data.endswith('.qosst'):
+        electronic_shot_noise_data = electronic_shot_noise_data.data[0]
     data = np.load(args.data)
+    if len(data.shape) == 2:
+        data = data[0]
     alice_symbols = np.load(args.alice_symbols)
-
     # Offline DSP
     quantum_symbols, indices, electronic_symbols, electronic_shot_symbols = offline_dsp(
         configuration,
