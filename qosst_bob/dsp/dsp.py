@@ -1519,6 +1519,9 @@ def _dsp_bob_direct_pilot_tracking(
         pilot_data = oaconvolve(subframe_data, pilot_bp_filter, mode="same")
         pilot_angle = np.angle(pilot_data)
 
+        if dsp_debug:
+            dsp_debug.tones.append(pilot_data)
+
         if pilot_phase_filtering_size > 1 or pilot_frequency_filtering_size > 1:
             logger.info("Filtering pilot")
             # The unwrapped angle can grow into a large number, but the full
@@ -1575,6 +1578,9 @@ def _dsp_bob_direct_pilot_tracking(
 
         begin_subframe = int(last_index + sps / 2 - 0.5)
         end_subframe = int(begin_subframe + subframe_length * (sps + 1) - 0.5)
+
+        if dsp_debug:
+            dsp_debug.uncorrected_data.append(np.array([]))
 
     special_params = SpecialDSPParams(
         symbol_rate=symbol_rate,
