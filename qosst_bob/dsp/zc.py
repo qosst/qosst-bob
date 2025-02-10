@@ -37,6 +37,7 @@ def synchronisation_zc(
     data: np.ndarray,
     zc_root: int,
     zc_length: int,
+    use_abs: bool = True
     resample: float = 1) -> Tuple[int, int]:
     """
     Find the beginning of a Zadoff-Chu sequence in data.
@@ -57,6 +58,7 @@ def synchronisation_zc(
         data (np.ndarray): the data from where the Zadoff-Chu should be found.
         zc_root (int): the root of the Zadoff-Chu sequence.
         zc_length (int): the length of the Zadoff-Chu sequence.
+        use_abs (bool, optional): use the absolute value of the Zadoff-Chu in the second search. Defaults to True.
         resample (float, optional): the optional resample to apply to the Zadoff-Chu sequence. Defaults to 1.
 
     Returns:
@@ -90,7 +92,10 @@ def synchronisation_zc(
     xcorr_end_point = min(approx_zc + 2 * n, len(data))
     data_zc = data[xcorr_start_point:xcorr_end_point]
     lags = signal.correlation_lags(len(data_zc), len(zadoff_chu), mode="same")
-    xcorr = np.abs(signal.correlate(data_zc, zadoff_chu, mode="same"))
+    if use_abs:
+        xcorr = np.abs(signal.correlate(np.abs(data_zc), np.abs(zadoff_chu), mode="same"))
+    else:
+        xcorr = np.abs(signal.correlate(data_zc, zadoff_chu, mode="same"))
 
     beginning_zc = lags[np.argmax(xcorr)] + xcorr_start_point
     end_zc = len(zadoff_chu) + beginning_zc
