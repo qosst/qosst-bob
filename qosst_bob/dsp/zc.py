@@ -37,7 +37,7 @@ def synchronisation_zc(
     data: np.ndarray,
     zc_root: int,
     zc_length: int,
-    use_abs: bool = True
+    use_abs: bool = True,
     resample: float = 1) -> Tuple[int, int]:
     """
     Find the beginning of a Zadoff-Chu sequence in data.
