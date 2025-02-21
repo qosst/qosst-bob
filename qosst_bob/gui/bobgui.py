@@ -426,7 +426,7 @@ def main():
                             QOSSTGUIActions.DSP,
                             QOSSTGUIActions.PARAMETERS_ESTIMATION,
                             QOSSTGUIActions.ERROR_CORRECTION,
-                            QOSSTGUIActions.PRIVACY_AMPLITICATION,
+                            QOSSTGUIActions.PRIVACY_AMPLIFICATION,
                         ],
                         disabled=False,
                     )
@@ -483,7 +483,7 @@ def main():
                                 QOSSTGUIActions.DSP,
                                 QOSSTGUIActions.PARAMETERS_ESTIMATION,
                                 QOSSTGUIActions.ERROR_CORRECTION,
-                                QOSSTGUIActions.PRIVACY_AMPLITICATION,
+                                QOSSTGUIActions.PRIVACY_AMPLIFICATION,
                             ],
                             disabled=False,
                         )
@@ -514,6 +514,11 @@ def main():
                 res = bob.dsp()
                 if res:
                     window[QOSSTGUIText.DSP_STATUS].update("DSP status: Done")
+                    if bob.quantum_symbols is not None:
+                        length = len(bob.quantum_symbols)
+                    else:
+                        length = 0
+                    window[QOSSTGUIText.LENGTH_SYMBOLS].update(length)
                 else:
                     window[QOSSTGUIText.DSP_STATUS].update("DSP status: failed")
                 autoplot(bob, values)
@@ -548,6 +553,11 @@ def main():
                     window[QOSSTGUIText.PE_DISTANCE].update(
                         -10 * np.log10(bob.transmittance / bob.config.bob.eta) / 0.2
                     )
+                    if bob.raw_key_material is not None:
+                        length = len(bob.raw_key_material)
+                    else:
+                        length = 0
+                    window[QOSSTGUIText.LENGTH_RAW_KEY].update(length)
                 else:
                     window[QOSSTGUIText.PARAMETERS_ESTIMATION_STATUS].update(
                         "PE status: Failed"
@@ -556,14 +566,91 @@ def main():
                 sg.popup_ok("Please read configuration first.")
         elif event == QOSSTGUIActions.ERROR_CORRECTION:
             if bob:
-                sg.popup_error("Error correction is not yet implemented.")
+                res = bob.error_correction()
+                if res:
+                    window[QOSSTGUIText.ERROR_CORRECTION_STATUS].update(
+                        "EC status: Done"
+                    )
+                    if bob.reconciled_key is not None:
+                        length = len(bob.reconciled_key)
+                    else:
+                        length = 0
+                    window[QOSSTGUIText.LENGTH_RECONCILED_KEY].update(length)
+                else:
+                    window[QOSSTGUIText.ERROR_CORRECTION_STATUS].update(
+                        "EC status: failed"
+                    )
             else:
                 sg.popup_ok("Please read configuration first.")
-        elif event == QOSSTGUIActions.PRIVACY_AMPLITICATION:
+        elif event == QOSSTGUIActions.PRIVACY_AMPLIFICATION:
             if bob:
-                sg.popup_error("Privacy amplification is not yet implemented.")
+                res = bob.privacy_amplification()
+                if res:
+                    window[QOSSTGUIText.PRIVACY_AMPLIFICATION_STATUS].update(
+                        "PA status: Done"
+                    )
+                    if bob.final_key is not None:
+                        length = len(bob.final_key)
+                    else:
+                        length = 0
+                    window[QOSSTGUIText.LENGTH_FINAL_KEY].update(length)
+                else:
+                    window[QOSSTGUIText.PRIVACY_AMPLIFICATION_STATUS].update(
+                        "PA status: failed"
+                    )
             else:
                 sg.popup_ok("Please read configuration first.")
+        elif event == QOSSTGUIActions.END_FRAME:
+            if bob:
+                res = bob.end_frame()
+                if res:
+                    # Disable most actions
+                    change_enable_status(
+                        window,
+                        [
+                            QOSSTGUIActions.QIE,
+                            QOSSTGUIActions.DSP,
+                            QOSSTGUIActions.PARAMETERS_ESTIMATION,
+                            QOSSTGUIActions.ERROR_CORRECTION,
+                            QOSSTGUIActions.PRIVACY_AMPLIFICATION,
+                        ],
+                        disabled=True,
+                    )
+
+                    # Reset texts
+                    window[QOSSTGUIText.FRAME_UUID].update("Frame UUID :")
+                    window[QOSSTGUIText.QIE_STATUS].update("QIE status: Not done")
+                    window[QOSSTGUIText.DSP_STATUS].update("DSP status: Not done")
+                    window[QOSSTGUIText.PARAMETERS_ESTIMATION_STATUS].update(
+                        "PE status: Not done"
+                    )
+                    window[QOSSTGUIText.ERROR_CORRECTION_STATUS].update(
+                        "EC status: Not done"
+                    )
+                    window[QOSSTGUIText.PRIVACY_AMPLIFICATION_STATUS].update(
+                        "PA status: Not done"
+                    )
+
+                    # Remove parameter estimation values
+                    window[QOSSTGUIText.PE_ETA].update("")
+                    window[QOSSTGUIText.PE_SHOT].update("")
+                    window[QOSSTGUIText.PE_VEL].update("")
+                    window[QOSSTGUIText.PE_ETA_T].update("")
+                    window[QOSSTGUIText.PE_T].update("")
+                    window[QOSSTGUIText.PE_EXCESS_NOISE_BOB].update("")
+                    window[QOSSTGUIText.PE_EXCESS_NOISE_ALICE].update("")
+                    window[QOSSTGUIText.PE_SKR].update("")
+                    window[QOSSTGUIText.PE_PHOTON_NUMBER].update("")
+                    window[QOSSTGUIText.PE_DISTANCE].update("")
+                    window[QOSSTGUIText.LENGTH_SYMBOLS].update("")
+                    window[QOSSTGUIText.LENGTH_RAW_KEY].update("")
+                    window[QOSSTGUIText.LENGTH_RECONCILED_KEY].update("")
+                    window[QOSSTGUIText.LENGTH_FINAL_KEY].update("")
+
+                    # Reset figures
+                    for figure in all_figures:
+                        figure.reset_figure()
+
         elif event == QOSSTGUIActions.ACQUISITION_ELEC_NOISE:
             if bob:
                 bob.get_electronic_noise_data()
@@ -672,6 +759,11 @@ def main():
             try:
                 key_ord = int(event.split(":")[1])
             except ValueError:
+                continue
+            if key_ord in [
+                56,
+                38,
+            ]:  # I don't really know why they happens but I need to get rid of them
                 continue
             if key_ord == SEQUENCE[sequence_pointer]:
                 sequence_pointer += 1

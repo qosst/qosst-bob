@@ -60,7 +60,6 @@ first_column = [
             "Status: Not connected", size=(40, 1), key=QOSSTGUIText.CONNECTION_STATUS
         )
     ],
-    [sg.Text("Address for Alice : ", key=QOSSTGUIText.ALICE_ADDRESS)],
     [sg.Button("Connect", key=QOSSTGUIActions.CONNECT, disabled=True)],
     [sg.HorizontalSeparator()],
     [sg.Text("Identification")],
@@ -106,14 +105,13 @@ first_column = [
     [
         sg.Button(
             "Privacy Amplification",
-            key=QOSSTGUIActions.PRIVACY_AMPLITICATION,
+            key=QOSSTGUIActions.PRIVACY_AMPLIFICATION,
             disabled=True,
         )
     ],
     [sg.HorizontalSeparator()],
     [
-        sg.Button("Exit", key=QOSSTGUIActions.EXIT),
-        sg.Button("About", key=QOSSTGUIActions.ABOUT),
+        sg.Button("End frame", key=QOSSTGUIActions.END_FRAME),
     ],
 ]
 
@@ -252,6 +250,22 @@ for figure in all_figures:
         )
     )
 
+parameter_estimation_tab = [
+    [
+        sg.Column(parameters_estimation_column_1),
+        sg.Push(),
+        sg.VerticalSeparator(),
+        sg.Column(parameters_estimation_column_2),
+    ],
+]
+
+key_length_tab = [
+    [sg.Text("Recovered symbols"), sg.Text("", key=QOSSTGUIText.LENGTH_SYMBOLS)],
+    [sg.Text("Raw key"), sg.Text("", key=QOSSTGUIText.LENGTH_RAW_KEY)],
+    [sg.Text("Reconciled key"), sg.Text("", key=QOSSTGUIText.LENGTH_RECONCILED_KEY)],
+    [sg.Text("Final key"), sg.Text("", key=QOSSTGUIText.LENGTH_FINAL_KEY)],
+]
+
 second_column = [
     [
         sg.TabGroup(
@@ -282,12 +296,15 @@ second_column = [
         )
     ],
     [sg.HorizontalSeparator()],
-    [sg.Text("Parameters estimation")],
     [
-        sg.Column(parameters_estimation_column_1),
-        sg.Push(),
-        sg.VerticalSeparator(),
-        sg.Column(parameters_estimation_column_2),
+        sg.TabGroup(
+            [
+                [
+                    sg.Tab("Parameter estimation", parameter_estimation_tab),
+                    sg.Tab("Lengths", key_length_tab),
+                ]
+            ]
+        )
     ],
 ]
 
@@ -389,6 +406,7 @@ tab_configuration_dsp = [
 ]
 
 third_column = [
+    [sg.Push(), sg.Text(f"qosst-bob version {__version__}")],
     [sg.Push(), sg.Image(source=str(LOGO_LOCATION), subsample=6), sg.Push()],
     [sg.Text("Logs")],
     [
@@ -417,6 +435,11 @@ third_column = [
             ]
         )
     ],
+    [
+        sg.Push(),
+        sg.Button("Exit", key=QOSSTGUIActions.EXIT),
+        sg.Button("About", key=QOSSTGUIActions.ABOUT),
+    ],
 ]
 
 layout_tab_controls = [
@@ -433,5 +456,4 @@ layout = [
     [
         layout_tab_controls,
     ],
-    [sg.Push(), sg.Text(f"qosst-bob version {__version__}")],
 ]

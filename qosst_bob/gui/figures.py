@@ -284,6 +284,18 @@ class QOSSTBobGUIFigure:
         self.func(None, self.axes)
         self.canvas = draw_figure(window[self.key].TKCanvas, self.figure)
 
+    def reset_figure(self):
+        """
+        Initialize the figure, the axes and make a dummy plot.
+
+        Args:
+            window (sg.Window): GUI window.
+        """
+        self.figure.clear()
+        self.axes = self.figure.add_subplot()
+        self.func(None, self.axes)
+        self.canvas.draw()
+
     def plot(self, bob: Bob):
         """
         Actualise the plot
