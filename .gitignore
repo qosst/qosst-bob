@@ -194,3 +194,4 @@ cython_debug/
 config.toml
 config*.toml
 config/*
+deps/
