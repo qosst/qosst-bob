@@ -20,7 +20,7 @@ Client code for QOSST Bob.
 """
 import logging
 import time
-from typing import Any, Optional
+from typing import Any, Optional, List
 import uuid
 import traceback
 from copy import deepcopy
@@ -35,6 +35,8 @@ from qosst_core.control_protocol.codes import QOSSTCodes
 from qosst_core.control_protocol.sockets import QOSSTClient
 from qosst_core.notifications import QOSSTNotifier
 from qosst_core.participant import Participant
+from qosst_core.utils import complex_to_real
+from qosst_core.schema.detection import SINGLE_POLARISATION_RF_HETERODYNE
 from qosst_hal.switch import GenericSwitch
 from qosst_hal.laser import GenericLaser
 from qosst_hal.adc import GenericADC
@@ -43,6 +45,9 @@ from qosst_hal.polarisation_controller import (
     PolarisationControllerChannel,
 )
 from qosst_hal.powermeter import GenericPowerMeter
+
+from qosst_pp.reconciliation import reconcile_bob
+from qosst_pp.privacy_amplification import privacy_amplification_bob
 
 from qosst_bob.dsp import dsp_bob, special_dsp
 from qosst_bob.dsp.dsp import find_global_angle
@@ -93,7 +98,16 @@ class Bob:
     excess_noise_bob: float  #: Excess noise estimated at Bob.
     vel: float  #: Normalised electronic noise.
     skr: float  #: Secret key rate.
+    secret_key_ratio: float  #: Secret key ration in bits/symbol.
     photon_number: float  #: Mean photon number at Alice's side.
+    signal_to_noise_ratio: float  #: Signal to noise ratio of the quantum symbols.
+
+    raw_key_material: Optional[
+        np.ndarray
+    ]  #: Raw key material before error reconciliation, after parameter estimation.
+
+    reconciled_key: Optional[List[int]]  #: Key after the reconciliation step.
+    final_key: Optional[List[int]]  #: Final key after privacy amplification step.
 
     adc: Optional[GenericADC]  #: ADC device for Bob.
     switch: Optional[GenericSwitch]  #: Switch device for Bob.
@@ -123,8 +137,26 @@ class Bob:
         self.is_connected = False
         self.config = None
 
+        self.enable_laser = enable_laser
+
+        self.laser = None
+        self.switch = None
+        self.adc = None
+        self.polarisation_controller = None
+        self.powermeter = None
+
+        logger.info("Initializing Bob...")
+
         self.electronic_noise = None
         self.electronic_shot_noise = None
+
+        self._reset()
+
+        self.load_configuration()
+        self._init_socket()
+        self._init_notifier()
+
+    def _reset(self):
 
         self.electronic_symbols = None
         self.electronic_shot_symbols = None
@@ -138,6 +170,10 @@ class Bob:
         self.excess_noise_bob = 0
         self.vel = 0
         self.skr = 0
+        self.secret_key_ratio = 0
+
+        self.reconciled_key = None
+        self.final_key = None
 
         self.adc_data = None
         self.signal_data = None
@@ -148,19 +184,7 @@ class Bob:
         self.quantum_data_phase_noisy = None
         self.quantum_symbols = None
 
-        self.enable_laser = enable_laser
-
-        self.laser = None
-        self.switch = None
-        self.adc = None
-
-        logger.info("Initializing Bob...")
-
         self.frame_uuid = None
-
-        self.load_configuration()
-        self._init_socket()
-        self._init_notifier()
 
     def load_configuration(self) -> None:
         """
@@ -555,9 +579,8 @@ class Bob:
 
         logger.info("Computing secret key rate")
         try:
-            self.skr = (
-                self.config.frame.quantum.symbol_rate
-                * self.config.bob.parameters_estimation.skr_calculator.skr(
+            self.secret_key_ratio = (
+                self.config.bob.parameters_estimation.skr_calculator.skr(
                     Va=2 * self.photon_number,
                     T=self.transmittance / self.config.bob.eta,
                     xi=self.excess_noise_bob / self.transmittance,
@@ -565,7 +588,8 @@ class Bob:
                     Vel=self.vel,
                     beta=0.95,
                 )
-            )
+            )  # Not final as computed with beta=0.95
+            self.skr = self.config.frame.quantum.symbol_rate * self.secret_key_ratio
         except ValueError:
             self.skr = -1
 
@@ -584,7 +608,24 @@ class Bob:
             },
         )
 
+        if self.config.bob.schema == SINGLE_POLARISATION_RF_HETERODYNE:
+            self.signal_to_noise_ratio = (
+                self.transmittance
+                * 2
+                * self.photon_number
+                / (2 + 2 * self.vel + self.excess_noise_bob)
+            )
+
         if code == QOSSTCodes.PE_APPROVED:
+            logger.info(
+                "Removing symbols used for parameters estimation from raw key material"
+            )
+            mask = np.ones(
+                len(self.quantum_symbols), dtype=bool
+            )  # Create an array of True, same length of quantum symbols
+            mask[self.indices] = False  # Set False where to remove
+            self.raw_key_material = np.copy(self.quantum_symbols[mask])
+            logger.info("%i raw key symbols", len(self.raw_key_material))
             return True
         return False
 
@@ -592,25 +633,67 @@ class Bob:
         """
         Apply error correction on the data.
 
-        Raises:
-            NotImplementedError: This function is not yet implemented.
-
         Returns:
             bool: True if the operation was successful, False otherwise.
         """
-        raise NotImplementedError("Error correction has not yet been implemented.")
+        # Perform reconciliation
+        # Data should be normalised
+        shot_variance = np.var(self.electronic_shot_symbols) - np.var(
+            self.electronic_symbols
+        )
+
+        # Also the SNR needs to be given in dB
+        snr_db = 10 * np.log10(self.signal_to_noise_ratio)
+        self.reconciled_key = reconcile_bob(
+            self.socket,
+            complex_to_real(self.raw_key_material / np.sqrt(shot_variance)),
+            self.config.post_processing.reconciliation.beta,
+            snr_db,
+            self.config.post_processing.reconciliation.dimension,
+        )
+        return self.reconciled_key is not None
 
     def privacy_amplification(self) -> bool:
         """
         Apply privacy amplification on the data.
 
-        Raises:
-            NotImplementedError: This function is not yet implemented.
-
         Returns:
             bool: True if the operation was successful, False otherwise.
         """
-        raise NotImplementedError("Privacy amplification has not yet been implemented.")
+        if len(self.reconciled_key):
+            self.final_key = privacy_amplification_bob(
+                self.socket,
+                self.reconciled_key,
+                self.secret_key_ratio,
+                self.config.post_processing.privacy_amplification.extractor,
+            )
+            return self.final_key is not None
+        logger.error(
+            "Reconciled key has length 0. Cannot perform privacy amplification."
+        )
+        return False
+
+    def end_frame(self) -> bool:
+        """
+        Push key to KMS, send end of frame to Alice, and reset attributes.
+        """
+        ret_code = True
+        if self.final_key:
+            if self.config.pushkey:
+                logger.info("Pushing key to KMS")
+                self.config.pushkey.interface(
+                    self.frame_uuid, self.final_key, **self.config.pushkey.kwargs
+                )
+            else:
+                logger.warning("No interface defined for KMS. Discarding key.")
+            code, _ = self.socket.request(QOSSTCodes.FRAME_ENDED)
+            if code != QOSSTCodes.FRAME_ENDED_ACK:
+                logger.error("Alice responded FRAME_ENDED with %s", str(code))
+                ret_code = False
+
+        logger.info("Resetting values")
+        self._reset()
+        return ret_code
 
     def _start_acquisition(self):
         """
@@ -705,8 +788,8 @@ class Bob:
 
         logger.info("Applying DSP on elec and elec+shot noise data")
 
-        params.elec_noise_ratio = config.bob.dsp.elec_noise_ratio
-        params.elec_shot_noise_ratio = config.bob.dsp.elec_shot_noise_ratio
+        params.elec_noise_ratio = self.config.bob.dsp.elec_noise_ratio
+        params.elec_shot_noise_ratio = self.config.bob.dsp.elec_shot_noise_ratio
         self.electronic_symbols, self.electronic_shot_symbols = special_dsp(
             self.electronic_noise.data, self.electronic_shot_noise.data, params
         )
