@@ -46,7 +46,7 @@ from qosst_hal.polarisation_controller import (
 )
 from qosst_hal.powermeter import GenericPowerMeter
 
-from qosst_pp.reconciliation import reconcile_bob
+from qosst_pp.reconciliation.reconciliation import reconcile_bob
 from qosst_pp.privacy_amplification import privacy_amplification_bob
 
 from qosst_bob.dsp import dsp_bob, special_dsp
@@ -54,6 +54,12 @@ from qosst_bob.dsp.dsp import find_global_angle
 from qosst_bob.data import ElectronicNoise, ElectronicShotNoise
 
 logger = logging.getLogger(__name__)
+
+try:
+    import zmq
+except ImportError:
+    zmq = None
+    logger.warning("zmq was not imported.")
 
 
 # pylint: disable=too-many-instance-attributes, too-many-public-methods
@@ -378,7 +384,8 @@ class Bob:
         """
         Get the data from the ADC.
         """
-        self.adc_data = self.adc.get_data()
+        self.adc_data = self.adc.get_data()[0]
+        print(self.adc_data)
 
     def _init_notifier(self):
         """
@@ -644,13 +651,53 @@ class Bob:
 
         # Also the SNR needs to be given in dB
         snr_db = 10 * np.log10(self.signal_to_noise_ratio)
-        self.reconciled_key = reconcile_bob(
-            self.socket,
-            complex_to_real(self.raw_key_material / np.sqrt(shot_variance)),
-            self.config.post_processing.reconciliation.beta,
-            snr_db,
-            self.config.post_processing.reconciliation.dimension,
+        normalized_bob_symbols = complex_to_real(
+            self.raw_key_material / np.sqrt(shot_variance)
         )
+        if self.config.post_processing.reconciliation.remote:
+            logger.info("Using remote reconciliation.")
+            assert zmq is not None
+
+            logger.info("Informing Alice of remote reconciliation.")
+            code, _ = self.socket.request(QOSSTCodes.EC_INITIALIZATION_REMOTE)
+
+            assert code == QOSSTCodes.EC_INITIALIZATION_REMOTE_ACK
+
+            logger.info("Creating ZMQ socket.")
+            zmq_context = zmq.Context()
+            zmq_socket = zmq_context.socket(zmq.REQ)
+
+            endpoint = self.config.post_processing.reconciliation.remote_endpoint
+            logger.info("Connecting ZMQ socket to %s", endpoint)
+            zmq_socket.connect(endpoint)
+
+            logger.info("Sending symbols")
+            zmq_socket.send_json(
+                {
+                    "bob_symbols": list(normalized_bob_symbols),
+                    "beta": self.config.post_processing.reconciliation.beta,
+                    "signal_to_noise_ratio": snr_db,
+                    "mdr_dimension": self.config.post_processing.reconciliation.dimension,
+                }
+            )
+
+            logger.info("Wait for answer from the remote worker.")
+            data = zmq_socket.recv_json()
+
+            logger.info("Received key.")
+            self.reconciled_key = data["key"]
+
+            logger.info("Closing ZMQ socket.")
+            zmq_socket.close()
+            zmq_context.term()
+        else:
+            self.reconciled_key = reconcile_bob(
+                self.socket,
+                normalized_bob_symbols,
+                self.config.post_processing.reconciliation.beta,
+                snr_db,
+                self.config.post_processing.reconciliation.dimension,
+            )
         return self.reconciled_key is not None
 
     def privacy_amplification(self) -> bool:
