@@ -24,7 +24,7 @@ are adapated versions of old DSP and might not work. They are untested.
 """
 # pylint: disable=too-many-lines
 import logging
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Type
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -37,8 +37,9 @@ from qosst_core.schema.detection import (
     SINGLE_POLARISATION_RF_HETERODYNE,
 )
 from qosst_core.comm.filters import root_raised_cosine_filter
+from qosst_core.synchronization import SynchronizationSequence
 
-from .zc import synchronisation_zc
+from .synchro import synchronize
 from .pilots import (
     recover_tone,
     find_one_pilot,
@@ -65,8 +66,8 @@ class DSPDebug:
     Dataclass for debug information for the DSP.
     """
 
-    begin_zadoff_chu: int = 0  #: Beginning of the Zadoff-Chu sequence.
-    end_zadoff_chu: int = 0  #: End of the Zadoff-Chu sequence.
+    begin_synchro: int = 0  #: Beginning of the synchronization sequence.
+    end_synchro: int = 0  #: End of the synchronization sequence.
     begin_data: int = 0  #: Beginning of useful data.
     end_data: int = 0  #: End of useful data.
     tones: List[np.ndarray] = field(
@@ -86,8 +87,8 @@ class DSPDebug:
 
     def __str__(self) -> str:
         res = "DSP Debug :\n"
-        res += f"Begin Zadoff-Chu : {self.begin_zadoff_chu}\n"
-        res += f"End Zadoff-Chu : {self.end_zadoff_chu}\n"
+        res += f"Begin synchronization : {self.begin_synchronization}\n"
+        res += f"End synchronization : {self.end_synchronization}\n"
         res += f"Begin data : {self.begin_data}\n"
         res += f"End data : {self.end_data}\n"
         res += f"Tones : {len(self.tones)} arrays\n"
@@ -144,9 +145,11 @@ def dsp_bob(
         config.frame.quantum.frequency_shift,
         config.frame.pilots.num_pilots,
         config.frame.pilots.frequencies,
-        config.frame.zadoff_chu.length,
-        config.frame.zadoff_chu.root,
-        config.frame.zadoff_chu.rate,
+        config.frame.synchronization.synchronization_cls,
+        config.frame.synchronization.zc_length,
+        config.frame.synchronization.zc_root,
+        config.frame.synchronization.mls_nbits,
+        config.frame.synchronization.rate,
         config.clock.sharing,
         config.local_oscillator.shared,
         config.bob.dsp.direct_pilot_tracking,
@@ -178,9 +181,11 @@ def dsp_bob_params(
     frequency_shift: float,
     num_pilots: int,
     pilots_frequencies: np.ndarray,
+    synchro_cls: Type[SynchronizationSequence],
     zc_length: int,
     zc_root: int,
-    zc_rate: float,
+    mls_nbits: int,
+    synchro_rate: float,
     shared_clock: bool = False,
     shared_lo: bool = False,
     direct_pilot_tracking: bool = False,
@@ -212,9 +217,11 @@ def dsp_bob_params(
         frequency_shift (float): frequency shift of the quantum data in Hz.
         num_pilots (int): number of pilots.
         pilots_frequencies (np.ndarray): list of pilot frequencies, in Hz.
+        synchro_cls (Type[SynchronizationSequence]): class generating the synchronization sequence.
         zc_length (int): length of the Zadoff-Chu sequence.
         zc_root (int): root of the Zadoff-Chu sequence.
-        zc_rate (float): rate of the Zadoff-Chu sequence.
+        mls_nbits (int): number of bits of the Maximum Length Sequence.
+        synchro_rate (float): rate of the synchronization sequence.
         shared_clock (bool, optional): if the clock is shared between Alice and Bob. Defaults to False.
         shared_lo (bool, optional): if the local oscillator is shared between Alice and Bob. Defaults to False.
         direct_pilot_tracking (bool, optional): whether the first pilot can directly be used to estimate beat frequency and phase noise. Defaults to False.
@@ -254,9 +261,11 @@ def dsp_bob_params(
             frequency_shift,
             num_pilots,
             pilots_frequencies,
+            synchro_cls,
             zc_length,
             zc_root,
-            zc_rate,
+            mls_nbits,
+            synchro_rate,
             process_subframes,
             subframe_length,
             fir_size=fir_size,
@@ -276,9 +285,11 @@ def dsp_bob_params(
             frequency_shift,
             num_pilots,
             pilots_frequencies,
+            synchro_cls,
             zc_length,
             zc_root,
-            zc_rate,
+            mls_nbits,
+            synchro_rate,
             process_subframes,
             subframe_length,
             fir_size=fir_size,
@@ -299,9 +310,11 @@ def dsp_bob_params(
             frequency_shift,
             num_pilots,
             pilots_frequencies,
+            synchro_cls,
             zc_length,
             zc_root,
-            zc_rate,
+            mls_nbits,
+            synchro_rate,
             process_subframes,
             subframe_length,
             fir_size=fir_size,
@@ -321,9 +334,11 @@ def dsp_bob_params(
             frequency_shift,
             num_pilots,
             pilots_frequencies,
+            synchro_cls,
             zc_length,
             zc_root,
-            zc_rate,
+            mls_nbits,
+            synchro_rate,
             subframe_length,
             subframe_subdivision,
             fir_size=fir_size,
@@ -346,9 +361,11 @@ def dsp_bob_params(
         frequency_shift,
         num_pilots,
         pilots_frequencies,
+        synchro_cls,
         zc_length,
         zc_root,
-        zc_rate,
+        mls_nbits,
+        synchro_rate,
         process_subframes,
         subframe_length,
         fir_size=fir_size,
@@ -374,9 +391,11 @@ def _dsp_bob_shared_clock_shared_lo(
     frequency_shift: float,
     num_pilots: int,
     pilots_frequencies: np.ndarray,
+    synchro_cls: Type[SynchronizationSequence],
     zc_length: int,
     zc_root: int,
-    zc_rate: float,
+    mls_nbits: int,
+    synchro_rate: float,
     process_subframes: bool = False,
     subframe_length: int = 0,
     fir_size: int = 500,
@@ -411,9 +430,11 @@ def _dsp_bob_shared_clock_shared_lo(
         frequency_shift (float): frequnecy shift in Hz for the quantum data.
         num_pilots (int): number of pilots.
         pilots_frequencies (np.ndarray): list of frequencies of the pilots.
+        synchro_cls (Type[SynchronizationSequence]): class generating the synchronization sequence.
         zc_length (int): length of the Zadoff-Chu sequence.
         zc_root (int): root of the Zadoff-Chu sequence.
-        zc_rate (float): rate of the Zadoff-Chu sequence.
+        mls_nbits (int): number of bits of the Maximum Length Sequence.
+        synchro_rate (float): rate of the synchronization sequence.
         process_subframes (bool, optional): if True, data is processed as subframes. Defaults to False.
         subframe_length (int, optional): number of symbols to recover in each subframe. Defaults to 0.
         fir_size (int, optional): size for the FIR filters. Defaults to 500.
@@ -445,19 +466,26 @@ def _dsp_bob_shared_clock_shared_lo(
 
     sps = int(adc_rate / symbol_rate)
 
-    # Recover beginning of sequence
-    if zc_rate == 0:
-        zc_rate = dac_rate
-    begin_zc, end_zc = synchronisation_zc(
-        data, zc_root, zc_length, resample=adc_rate / zc_rate
+    # Create the synchronization sequence object
+    synchro_obj = synchro_cls(
+        root=zc_root,
+        length=zc_length,
+        nbits=mls_nbits,
     )
-    begin_data = end_zc
+
+    # Recover beginning of sequence
+    if syncho_rate == 0:
+        syncho_rate = dac_rate
+    begin_synchro, end_synchro = synchronize(
+        data, synchro_obj, resample=adc_rate / synchro_rate
+    )
+    begin_data = end_synchro
     end_data = int(begin_data + num_symbols * sps)
     useful_data = data[begin_data:end_data]
 
     if dsp_debug:
-        dsp_debug.begin_zadoff_chu = begin_zc
-        dsp_debug.end_zadoff_chu = end_zc
+        dsp_debug.begin_synchro = begin_synchro
+        dsp_debug.end_synchro = end_synchro
         dsp_debug.begin_data = begin_data
         dsp_debug.end_data = end_data
 
@@ -556,9 +584,11 @@ def _dsp_bob_shared_clock_unshared_lo(
     frequency_shift: float,
     num_pilots: int,
     pilots_frequencies: np.ndarray,
+    synchro_cls: Type[SynchronizationSequence],
     zc_length: int,
     zc_root: int,
-    zc_rate: float,
+    mls_nbits: int,
+    synchro_rate: float,
     process_subframes: bool = False,
     subframe_length: int = 0,
     fir_size: int = 500,
@@ -595,9 +625,11 @@ def _dsp_bob_shared_clock_unshared_lo(
         frequency_shift (float): frequency shift of the quantum symbols in Hz.
         num_pilots (int): number pilots.
         pilots_frequencies (np.ndarray): list of the frequencies of the pilots.
+        synchro_cls (Type[SynchronizationSequence]): class generating the synchronization sequence.
         zc_length (int): length of the Zadoff-Chu sequence.
         zc_root (int): root of the Zadoff-Chu sequence.
-        zc_rate (float): shift, in Hz, of the Zadoff-Chu sequence.
+        mls_nbits (int): number of bits of the Maximum Length Sequence.
+        synchro_rate (float): rate of the synchronization sequence.
         process_subframes (bool, optional): if True, process the data with subframes. Defaults to False.
         subframe_length (int, optional): number of symbols to recover in each subframe. Defaults to 0.
         fir_size (int, optional): size of the FIR filters.. Defaults to 500.
@@ -644,22 +676,28 @@ def _dsp_bob_shared_clock_unshared_lo(
         dsp_debug.real_pilot_frequencies = [f_pilot_real]
         dsp_debug.beat_frequency = f_beat
 
-    if zc_rate == 0:
-        zc_rate = dac_rate
-    begin_zc, end_zc = synchronisation_zc(
-        data * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / adc_rate),
-        zc_root,
-        zc_length,
-        resample=adc_rate / zc_rate,
+    # Create the synchronization sequence object
+    synchro_obj = synchro_cls(
+        root=zc_root,
+        length=zc_length,
+        nbits=mls_nbits,
     )
 
-    begin_data = end_zc
+    if synchro_rate == 0:
+        synchro_rate = dac_rate
+    begin_synchro, end_synchro = synchronize(
+        data * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / adc_rate),
+        synchro_obj,
+        resample=adc_rate / synchro_rate,
+    )
+
+    begin_data = end_synchro
     end_data = int(begin_data + num_symbols * sps)
     useful_data = data[begin_data:end_data]
 
     if dsp_debug:
-        dsp_debug.begin_zadoff_chu = begin_zc
-        dsp_debug.end_zadoff_chu = end_zc
+        dsp_debug.begin_synchro = begin_synchro
+        dsp_debug.end_synchro = end_synchro
         dsp_debug.begin_data = begin_data
         dsp_debug.end_data = end_data
 
@@ -766,9 +804,11 @@ def _dsp_bob_unshared_clock_shared_lo(
     frequency_shift: float,
     num_pilots: int,
     pilots_frequencies: np.ndarray,
+    synchro_cls: Type[SynchronizationSequence],
     zc_length: int,
     zc_root: int,
-    zc_rate: float,
+    mls_nbits: int,
+    synchro_rate: float,
     process_subframes: bool = False,
     subframe_length: int = 0,
     fir_size: int = 500,
@@ -801,9 +841,11 @@ def _dsp_bob_unshared_clock_shared_lo(
         frequency_shift (float): frequency shift of the quantum symbols, in Hz.
         num_pilots (int): number of pilots.
         pilots_frequencies (np.ndarray): list of the frequencies of the pilots.
+        synchro_cls (Type[SynchronizationSequence]): class generating the synchronization sequence.
         zc_length (int): length of the Zadoff-Chu sequence.
         zc_root (int): root of the Zadoff-Chu sequence.
-        zc_rate (float): rate of the Zadoff-Chu sequence.
+        mls_nbits (int): number of bits of the Maximum Length Sequence.
+        synchro_rate (float): rate of the synchronization sequence.
         process_subframes (bool, optional): if True, process the data in subframes. Defaults to False.
         subframe_length (int, optional): number of symbols to recover in each subframe. Defaults to 0.
         fir_size (int, optional): size of the FIR filters. Defaults to 500.
@@ -835,21 +877,28 @@ def _dsp_bob_unshared_clock_shared_lo(
 
     sps = adc_rate / symbol_rate
 
-    # Recover beginning of sequence
-    if zc_rate == 0:
-        zc_rate = dac_rate
-    begin_zc, end_zc = synchronisation_zc(
-        data, zc_root, zc_length, resample=adc_rate / zc_rate
+    # Create the synchronization sequence object
+    synchro_obj = synchro_cls(
+        root=zc_root,
+        length=zc_length,
+        nbits=mls_nbits,
     )
-    begin_data = end_zc
+
+    # Recover beginning of sequence
+    if synchro_rate == 0:
+        synchro_rate = dac_rate
+    begin_synchro, end_synchro = synchronize(
+        data, synchro_obj, resample=adc_rate / synchro_rate
+    )
+    begin_data = end_synchro
     end_data = int(
         begin_data + num_symbols * np.ceil(sps + 1)
     )  # We take a bit more of what is needed to be sure to have all symbols
     useful_data = data[begin_data:end_data]
 
     if dsp_debug:
-        dsp_debug.begin_zadoff_chu = begin_zc
-        dsp_debug.end_zadoff_chu = end_zc
+        dsp_debug.begin_synchro = begin_synchro
+        dsp_debug.end_synchro = end_synchro
         dsp_debug.begin_data = begin_data
         dsp_debug.end_data = end_data
 
@@ -971,9 +1020,11 @@ def _dsp_bob_general(
     frequency_shift: float,
     num_pilots: int,
     pilots_frequencies: np.ndarray,
+    synchro_cls: Type[SynchronizationSequence],
     zc_length: int,
     zc_root: int,
-    zc_rate: float,
+    mls_nbits: int,
+    synchro_rate: float,
     process_subframes: bool = False,
     subframe_length: int = 0,
     fir_size: int = 500,
@@ -1015,9 +1066,11 @@ def _dsp_bob_general(
         frequency_shift (float): frequency shift of the quantum symbol, in Hz.
         num_pilots (int): number of pilots.
         pilots_frequencies (np.ndarray): list of the frequencies of the pilots.
+        synchro_cls (Type[SynchronizationSequence]): class generating the synchronization sequence.
         zc_length (int): length of the Zadoff-Chu sequence.
         zc_root (int): root of the Zadoff-Chu sequence.
-        zc_rate (float): rate of the Zadoff-Chu sequence.
+        mls_nbits (int): number of bits of the Maximum Length Sequence.
+        synchro_rate (float): rate of the synchronization sequence.
         process_subframes (bool, optional): if True, process the data with subframes. Defaults to False.
         subframe_length (int, optional): number of symbols to recover in each subframes. Defaults to 0.
         fir_size (int, optional): size of the FIR filters. Defaults to 500.
@@ -1058,21 +1111,28 @@ def _dsp_bob_general(
     f_pilot_1 = pilots_frequencies[0]
     f_pilot_2 = pilots_frequencies[1]
 
+    # Create the synchronization sequence object
+    synchro_obj = synchro_cls(
+        root=zc_root,
+        length=zc_length,
+        nbits=mls_nbits,
+    )
+
     # Use the base DAC rate if the sample rate of the ZC sequence has not been
     # provided.
-    if zc_rate == 0:
-        zc_rate = dac_rate
-    sps_approx = int(adc_rate / zc_rate)
+    if synchro_rate == 0:
+        synchro_rate = dac_rate
+    sps_approx = int(adc_rate / synchro_rate)
 
     # A first approximate search of the start of the ZC sequence, based on the
     # signal envelope.
-    uniform_filter_length = int(zc_length * sps_approx)
+    uniform_filter_length = int(synchro_obj.length * sps_approx)
     envelope = uniform_filter1d(np.abs(data), uniform_filter_length)
-    approx_zc = int(np.argmax(envelope) - uniform_filter_length / 2)
+    approx_synchro = int(np.argmax(envelope) - uniform_filter_length / 2)
 
     # The pilot frequencies are estimated on a large sample
     # (typically 10M points) taken after the ZC sequence.
-    pilot_start_point = approx_zc + 2 * zc_length * sps_approx
+    pilot_start_point = approx_synchro + 2 * zc_length * sps_approx
     data_pilots = data[pilot_start_point:pilot_start_point+num_samples_pilot_search]
     f_pilot_real_1, f_pilot_real_2 = find_two_pilots(data_pilots, adc_rate, excl=excl)
     logger.info(
@@ -1129,39 +1189,37 @@ def _dsp_bob_general(
         dsp_debug.real_pilot_frequencies = [f_pilot_real_1, f_pilot_real_2]
         dsp_debug.beat_frequency = f_beat
 
-    begin_zc, end_zc = synchronisation_zc(
+    begin_synchro, end_synchro = synchronize(
         data * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / equi_adc_rate),
-        zc_root,
-        zc_length,
-        resample=equi_adc_rate / zc_rate,
+        synchro_obj,
+        resample=equi_adc_rate / synchro_rate,
     )
 
-    # Now that we have an estimation of the beginning of the Zadoff-Chu sequence
+    # Now that we have an estimation of the beginning of the synchronization sequence
     # let's reestimate f_beat more properly.
-    len_zc = np.ceil(zc_length * equi_adc_rate / dac_rate).astype(int)
+    len_synchro = np.ceil(synchro_obj.length * equi_adc_rate / dac_rate).astype(int)
     f_pilot_real_1, f_pilot_real_2 = find_two_pilots(
-        data[end_zc + len_zc : end_zc + len_zc + num_samples_fbeat_estimation],
+        data[end_synchro + len_synchro : end_synchro + len_synchro + num_samples_fbeat_estimation],
         equi_adc_rate,
         excl=excl,
     )
     f_beat = f_pilot_real_1 - f_pilot_1
 
-    begin_zc, end_zc = synchronisation_zc(
+    begin_synchro, end_synchro = synchronize(
         data * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / equi_adc_rate),
-        zc_root,
-        zc_length,
-        resample=equi_adc_rate / zc_rate,
+        synchro_obj,
+        resample=equi_adc_rate / synchro_rate,
     )
 
-    begin_data = end_zc
+    begin_data = end_synchro
     end_data = int(
         begin_data + num_symbols * np.ceil(sps + 1)
     )  # We take a bit more of what is needed to be sure to have all symbols
     useful_data = data[begin_data:end_data]
 
     if dsp_debug:
-        dsp_debug.begin_zadoff_chu = begin_zc
-        dsp_debug.end_zadoff_chu = end_zc
+        dsp_debug.begin_synchro = begin_synchro
+        dsp_debug.end_synchro = end_synchro
         dsp_debug.begin_data = begin_data
         dsp_debug.end_data = end_data
 
@@ -1289,9 +1347,11 @@ def _dsp_bob_direct_pilot_tracking(
     frequency_shift: float,
     num_pilots: int,
     pilots_frequencies: np.ndarray,
+    synchro_cls: Type[SynchronizationSequence],
     zc_length: int,
     zc_root: int,
-    zc_rate: float,
+    mls_nbits: int,
+    synchro_rate: float,
     subframe_length: int = 50_000,
     subframe_subdivision: int = 1,
     fir_size: int = 500,
@@ -1336,9 +1396,11 @@ def _dsp_bob_direct_pilot_tracking(
         frequency_shift (float): frequency shift of the quantum symbol, in Hz.
         num_pilots (int): number of pilots.
         pilots_frequencies (np.ndarray): list of the frequencies of the pilots.
+        synchro_cls (Type[SynchronizationSequence]): class generating the synchronization sequence.
         zc_length (int): length of the Zadoff-Chu sequence.
         zc_root (int): root of the Zadoff-Chu sequence.
-        zc_rate (float): rate of the Zadoff-Chu sequence.
+        mls_nbits (int): number of bits of the Maximum Length Sequence.
+        synchro_rate (float): rate of the synchronization sequence.
         subframe_length (int, optional): number of symbols to recover in each subframes. Defaults to 50000.
         subframe_subdivision (int, optional): number of subdivisions of each frame for a finer-grained global phase recovery. Defaults to 1.
         fir_size (int, optional): size of the FIR filters. Defaults to 500.
@@ -1379,20 +1441,27 @@ def _dsp_bob_direct_pilot_tracking(
     # Convert the data to float32
     data = data.astype('f')
 
-    # Use the base DAC rate if the sample rate of the ZC sequence has not been
-    # provided.
-    if zc_rate == 0:
-        zc_rate = dac_rate
-    zc_oversampling = int(adc_rate / zc_rate)
+    # Create the synchronization sequence object
+    synchro_obj = synchro_cls(
+        root=zc_root,
+        length=zc_length,
+        nbits=mls_nbits,
+    )
 
-    logger.info("Computing envelope for approximate ZC search")
-    envelope = np.abs(data[::zc_oversampling])
-    envelope = uniform_filter1d(envelope, zc_length)
-    preamble_zc_start = (np.argmax(envelope) - zc_length // 2) * zc_oversampling
+    # Use the base DAC rate if the sample rate of the synchronization sequence has not been
+    # provided.
+    if synchro_rate == 0:
+        synchro_rate = dac_rate
+    synchro_oversampling = int(adc_rate / synchro_rate)
+
+    logger.info("Computing envelope for approximate synchronization sequence search")
+    envelope = np.abs(data[::synchro_oversampling])
+    envelope = uniform_filter1d(envelope, synchro_obj.length)
+    preamble_synchro_start = (np.argmax(envelope) - synchro_obj.length // 2) * synchro_oversampling
 
     # The pilot frequencies are estimated on a large sample
-    # (typically 10M points) taken after the ZC sequence.
-    pilot_start_point = preamble_zc_start + 2 * zc_length * zc_oversampling
+    # (typically 10M points) taken after the synchronization sequence.
+    pilot_start_point = preamble_synchro_start + 2 * zc_length * synchro_oversampling
     data_pilots = data[pilot_start_point:pilot_start_point+num_samples_pilot_search]
 
     if num_pilots == 2:
@@ -1449,26 +1518,26 @@ def _dsp_bob_direct_pilot_tracking(
     if dsp_debug:
         dsp_debug.beat_frequency = f_beat
 
-    logger.info('Searching for start of the ZC sequence')
-    zc_search_start = max(preamble_zc_start - 4 * zc_length * zc_oversampling, 0)
-    zc_search_end = zc_search_start + 8 * zc_length * zc_oversampling
-    data_zc = data[zc_search_start:zc_search_end]
-    shift = np.exp(-1j * 2 * np.pi * np.arange(len(data_zc)) * f_beat / equi_adc_rate)
-    begin_zc, end_zc = synchronisation_zc(
-        data_zc * shift, zc_root, zc_length,
-        resample=equi_adc_rate / zc_rate)
-    begin_zc += zc_search_start
-    end_zc += zc_search_start
+    logger.info('Searching for start of the synchronization sequence')
+    synchro_search_start = max(preamble_synchro_start - 4 * synchro_obj.length * synchro_oversampling, 0)
+    synchro_search_end = synchro_search_start + 8 * synchro_obj.length * synchro_oversampling
+    data_synchro = data[synchro_search_start:synchro_search_end]
+    shift = np.exp(-1j * 2 * np.pi * np.arange(len(data_synchro)) * f_beat / equi_adc_rate)
+    begin_synchro, end_synchro = synchronize(
+        data_synchro * shift, synchro_obj,
+        resample=equi_adc_rate / synchro_rate)
+    begin_synchro += synchro_search_start
+    end_synchro += synchro_search_start
 
-    begin_data = end_zc
+    begin_data = end_synchro
     end_data = int(
         begin_data + num_symbols * np.ceil(sps + 1)
     )  # We take a bit more of what is needed to be sure to have all symbols
     useful_data = data[begin_data:end_data]
 
     if dsp_debug:
-        dsp_debug.begin_zadoff_chu = begin_zc
-        dsp_debug.end_zadoff_chu = end_zc
+        dsp_debug.begin_synchro = begin_synchro
+        dsp_debug.end_synchro = end_synchro
         dsp_debug.begin_data = begin_data
         dsp_debug.end_data = end_data
         dsp_debug.tones = []
