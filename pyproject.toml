@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "qosst-bob"
-version = "0.10.2"
+version = "0.10.4"
 description = "Bob submodule of QOSST, containing modules for Bob client, the GUI, the DSP of Bob and parameters estimation."
 authors = [
     "Yoann Piétri <Yoann.Pietri@lip6.fr>",
