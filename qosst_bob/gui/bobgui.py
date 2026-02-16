@@ -352,13 +352,13 @@ def main():
 
             # Set configuration in ZC tab
             window[QOSSTGUIText.CONFIGURATION_ZC_ROOT].update(
-                bob.config.frame.zadoff_chu.root
+                bob.config.frame.synchronization.zc_root
             )
             window[QOSSTGUIText.CONFIGURATION_ZC_LENGTH].update(
-                bob.config.frame.zadoff_chu.length
+                bob.config.frame.synchronization.zc_length
             )
             window[QOSSTGUIText.CONFIGURATION_ZC_RATE].update(
-                bob.config.frame.zadoff_chu.rate * 1e-6
+                bob.config.frame.synchronization.rate * 1e-6
             )
 
             # Set configuration in the pilots tab
