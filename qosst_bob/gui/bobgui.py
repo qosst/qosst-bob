@@ -667,8 +667,7 @@ def main():
         elif ":" in event:
             # Keyboard events are returned in the format
             # key:number
-            # I am not sure what number it is since it doesn't seem
-            # to be the ordinal.
+            # I am not sure what number it is since it doesn't seem to be the ordinal.
             try:
                 key_ord = int(event.split(":")[1])
             except ValueError:
