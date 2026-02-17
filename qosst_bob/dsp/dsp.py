@@ -55,6 +55,7 @@ from .resample import (
     best_sampling_point,
     upsample
 )
+from .phase_estimation import estimate_phase
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ class SpecialDSPParams:
 
 
 def dsp_bob(
-    data: np.ndarray, config: Configuration
+    data: np.ndarray, config: Configuration,
 ) -> Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]:
     """
     DSP function for Bob, given the data and the configuration.
@@ -127,6 +128,7 @@ def dsp_bob(
     Args:
         data (np.ndarray): the data on which to apply the DSP.
         config (Configuration): the configuration object.
+        electronic_shot_noise_data (np.ndarray, optional): the electronic shot noise data.
 
     Returns:
         Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]: array of symbols, SpecialDSPParams containing data to apply the exact same DSP to other data and DSPDebug containing debug information,.
@@ -150,6 +152,7 @@ def dsp_bob(
         config.frame.synchronization.zc_root,
         config.frame.synchronization.mls_nbits,
         config.frame.synchronization.rate,
+        config.bob.switch.switching_time,
         config.clock.sharing,
         config.local_oscillator.shared,
         config.bob.dsp.direct_pilot_tracking,
@@ -186,6 +189,7 @@ def dsp_bob_params(
     zc_root: int,
     mls_nbits: int,
     synchro_rate: float,
+    switching_time: float = 0.02,
     shared_clock: bool = False,
     shared_lo: bool = False,
     direct_pilot_tracking: bool = False,
@@ -341,6 +345,7 @@ def dsp_bob_params(
             synchro_rate,
             subframe_length,
             subframe_subdivision,
+            switching_time=switching_time,
             fir_size=fir_size,
             tone_filtering_cutoff=tone_filtering_cutoff,
             abort_clock_recovery=abort_clock_recovery,
@@ -1352,6 +1357,8 @@ def _dsp_bob_direct_pilot_tracking(
     zc_root: int,
     mls_nbits: int,
     synchro_rate: float,
+    switching_time: float = 0.02,
+    linewidth: float = 100,
     subframe_length: int = 50_000,
     subframe_subdivision: int = 1,
     fir_size: int = 500,
@@ -1423,6 +1430,14 @@ def _dsp_bob_direct_pilot_tracking(
         dsp_debug = DSPDebug()
     else:
         dsp_debug = None
+
+    # Separate shot noise if switching time is given
+    if switching_time:
+        end_electronic_shot_noise = int(
+            switching_time * adc_rate
+        )
+        data = data[end_electronic_shot_noise:]
+        electronic_shot_noise_data = electronic_shot_noise_data[:end_electronic_shot_noise]
 
     # Find pilot frequency
     if num_pilots < 1:
@@ -1577,6 +1592,20 @@ def _dsp_bob_direct_pilot_tracking(
         1j * 2 * np.pi * np.arange(fir_size) * f_pilot_real_1 / equi_adc_rate
     )).astype(np.complex64)
 
+    # Correct the phase noise on the whole frame before starting to extract symbols, 
+    # to avoid the boundary effects of the filters on the subframes.
+    logger.info("Recovering first pilot tone")
+    pilot_data = oaconvolve(subframe_data, pilot_bp_filter, mode="same")
+    shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same")
+    
+    logger.info("Correcting phase noise on the whole frame")
+    phase_noise = estimate_phase(pilot_data, shot_noise_data, equi_adc_rate, linewidth)
+
+    clean_pilot = np.exp(-1j * phase_noise).astype(np.complex64)
+
+    logger.info("Cancelling phase noise")
+    useful_data *= clean_pilot
+
     while num_symbols_recovered < num_symbols:
         # Include more samples to account for the boundary condition of filters.
         begin_extended_subframe = max(
@@ -1584,32 +1613,13 @@ def _dsp_bob_direct_pilot_tracking(
         )
         subframe_data = useful_data[begin_extended_subframe:end_subframe].astype(np.complex64)
 
-        logger.info("Recovering first pilot tone")
-        pilot_data = oaconvolve(subframe_data, pilot_bp_filter, mode="same")
-        pilot_angle = np.angle(pilot_data)
+        # if dsp_debug:
+        #     dsp_debug.tones.append(pilot_data[begin_extended_subframe:end_subframe])
 
-        if dsp_debug:
-            dsp_debug.tones.append(pilot_data)
+        # clean_pilot = np.exp(-1j * phase_noise[begin_extended_subframe:end_subframe]).astype(np.complex64)
 
-        if pilot_phase_filtering_size > 1 or pilot_frequency_filtering_size > 1:
-            logger.info("Filtering pilot")
-            # The unwrapped angle can grow into a large number, but the full
-            # precision is needed. Convert to double.
-            pilot_angle = np.unwrap(pilot_angle.astype('d'))
-            if pilot_phase_filtering_size > 1:
-                pilot_angle = uniform_filter1d(
-                    pilot_angle,
-                    pilot_phase_filtering_size
-                )
-            if pilot_frequency_filtering_size > 1:
-                pilot_angle = np.cumsum(uniform_filter1d(
-                    np.diff(pilot_angle, append=pilot_angle[-1]),
-                    pilot_frequency_filtering_size)
-                )
-        clean_pilot = np.exp(-1j * pilot_angle).astype(np.complex64)
-
-        logger.info("Cancelling phase noise and shifting quantum data to baseband")
-        subframe_data *= clean_pilot
+        logger.info("Shifting quantum data to baseband")
+        # subframe_data *= clean_pilot
         subframe_data *= shift_up[:len(subframe_data)]
 
         logger.info("Applying RRC filter")

@@ -43,8 +43,8 @@ def offline_dsp(
     config: Configuration,
     data: np.ndarray,
     electronic_noise_data: np.ndarray,
-    electronic_shot_noise_data: np.ndarray,
     all_alice_symbols: np.ndarray,
+    electronic_shot_noise_data: np.ndarray = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Perform offline DSP given the configuration object,
@@ -63,12 +63,6 @@ def offline_dsp(
     """
     warnings.warn("Offline DSP is experimental.")
     logger.info("Starting offline DSP")
-
-    if config.bob.switch.switching_time:
-        end_electronic_shot_noise = int(
-            config.bob.switch.switching_time * config.bob.adc.rate
-        )
-        data = data[end_electronic_shot_noise:]
 
     quantum_symbols, params, dsp_debug = dsp_bob(data, config)
 
