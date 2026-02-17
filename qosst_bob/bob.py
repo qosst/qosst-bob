@@ -636,12 +636,6 @@ class Bob:
         logger.info("Applying DSP on quantum data")
         data = self.signal_data[0]
 
-        if self.config.bob.switch.switching_time:
-            self.end_electronic_shot_noise = int(
-                self.config.bob.switch.switching_time * self.config.bob.adc.rate
-            )
-            data = data[self.end_electronic_shot_noise :]
-
         self.quantum_symbols, params, dsp_debug = dsp_bob(data, self.config)
 
         # Correct global phase of each frame of quantum symbols
