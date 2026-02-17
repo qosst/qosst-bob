@@ -343,9 +343,9 @@ def dsp_bob_params(
             zc_root,
             mls_nbits,
             synchro_rate,
-            subframe_length,
-            subframe_subdivision,
             switching_time=switching_time,
+            subframe_length=subframe_length,
+            subframe_subdivision=subframe_subdivision,
             fir_size=fir_size,
             tone_filtering_cutoff=tone_filtering_cutoff,
             abort_clock_recovery=abort_clock_recovery,
@@ -1437,7 +1437,7 @@ def _dsp_bob_direct_pilot_tracking(
             switching_time * adc_rate
         )
         data = data[end_electronic_shot_noise:]
-        electronic_shot_noise_data = electronic_shot_noise_data[:end_electronic_shot_noise]
+        electronic_shot_noise_data = data[:end_electronic_shot_noise]
 
     # Find pilot frequency
     if num_pilots < 1:
@@ -1595,7 +1595,7 @@ def _dsp_bob_direct_pilot_tracking(
     # Correct the phase noise on the whole frame before starting to extract symbols, 
     # to avoid the boundary effects of the filters on the subframes.
     logger.info("Recovering first pilot tone")
-    pilot_data = oaconvolve(subframe_data, pilot_bp_filter, mode="same")
+    pilot_data = oaconvolve(useful_data, pilot_bp_filter, mode="same")
     shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same")
     
     logger.info("Correcting phase noise on the whole frame")
@@ -1604,7 +1604,7 @@ def _dsp_bob_direct_pilot_tracking(
     clean_pilot = np.exp(-1j * phase_noise).astype(np.complex64)
 
     logger.info("Cancelling phase noise")
-    useful_data *= clean_pilot
+    useful_data = useful_data.astype(np.complex64) * clean_pilot
 
     while num_symbols_recovered < num_symbols:
         # Include more samples to account for the boundary condition of filters.
