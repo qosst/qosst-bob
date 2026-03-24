@@ -39,7 +39,9 @@ from qosst_core.schema.detection import (
 from qosst_core.comm.filters import root_raised_cosine_filter
 from qosst_core.synchronization import SynchronizationSequence
 from qosst_core.dsp.phase_estimator import PhaseEstimator
+from qosst_core.dsp.timing_estimator import TimingRecoveryEstimator
 from qosst_bob.dsp.phase_estimation import ClassicalPhaseEstimator
+from qosst_bob.dsp.timing_recovery import BestSamplingPointTimingRecovery
 
 from .synchro import synchronize
 from .pilots import (
@@ -154,9 +156,11 @@ def dsp_bob(
         config.frame.synchronization.mls_nbits,
         config.frame.synchronization.rate,
         config.bob.switch.switching_time,
+        config.bob.dsp.linewidth,
         config.clock.sharing,
         config.local_oscillator.shared,
         config.bob.dsp.phase_estimator,
+        config.bob.dsp.timing_recovery_estimator,
         config.bob.dsp.direct_pilot_tracking,
         config.bob.dsp.process_subframes,
         config.bob.dsp.subframes_size,
@@ -192,9 +196,11 @@ def dsp_bob_params(
     mls_nbits: int,
     synchro_rate: float,
     switching_time: float = 0.02,
+    linewidth: float = 5e3,
     shared_clock: bool = False,
     shared_lo: bool = False,
     phase_estimator_cls: Type[PhaseEstimator] = ClassicalPhaseEstimator,
+    timing_recovery_estimator_cls: Type[TimingRecoveryEstimator] = BestSamplingPointTimingRecovery,
     direct_pilot_tracking: bool = False,
     process_subframes: bool = False,
     subframe_length: int = 0,
@@ -347,7 +353,9 @@ def dsp_bob_params(
             mls_nbits,
             synchro_rate,
             phase_estimator_cls=phase_estimator_cls,
+            timing_recovery_estimator_cls=timing_recovery_estimator_cls,
             switching_time=switching_time,
+            linewidth=linewidth,
             subframe_length=subframe_length,
             subframe_subdivision=subframe_subdivision,
             fir_size=fir_size,
@@ -1362,8 +1370,9 @@ def _dsp_bob_direct_pilot_tracking(
     mls_nbits: int,
     synchro_rate: float,
     phase_estimator_cls: Type[PhaseEstimator],
+    timing_estimator_cls: Type[TimingRecoveryEstimator],
     switching_time: float = 0.02,
-    linewidth: float = 100,
+    linewidth: float = 5e3,
     subframe_length: int = 50_000,
     subframe_subdivision: int = 1,
     fir_size: int = 500,
@@ -1617,6 +1626,8 @@ def _dsp_bob_direct_pilot_tracking(
     logger.info("Cancelling phase noise")
     useful_data = useful_data.astype(np.complex64) * clean_pilot
 
+    timing_estimator = timing_estimator_cls(sps, subframe_length, symbol_timing_oversampling)
+
     while num_symbols_recovered < num_symbols:
         # Include more samples to account for the boundary condition of filters.
         begin_extended_subframe = max(
@@ -1637,14 +1648,7 @@ def _dsp_bob_direct_pilot_tracking(
         if symbol_timing_oversampling != 1:
             subframe_data = upsample(subframe_data, symbol_timing_oversampling, 2)
 
-        best_t = _best_sampling_point_float(
-            subframe_data,
-            sps * symbol_timing_oversampling
-        )
-        best_grid = np.round(
-            best_t + sps * symbol_timing_oversampling * np.arange(
-                subframe_length)
-        ).astype(int)
+        best_grid = timing_estimator.estimate_timing(subframe_data)
 
         logger.info("Downsampling")
         subframe_data = subframe_data[best_grid]
