@@ -38,6 +38,8 @@ from qosst_core.schema.detection import (
 )
 from qosst_core.comm.filters import root_raised_cosine_filter
 from qosst_core.synchronization import SynchronizationSequence
+from qosst_core.dsp.phase_estimator import PhaseEstimator
+from qosst_bob.dsp.phase_estimation import ClassicalPhaseEstimator
 
 from .synchro import synchronize
 from .pilots import (
@@ -55,7 +57,6 @@ from .resample import (
     best_sampling_point,
     upsample
 )
-from .phase_estimation import estimate_phase
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,7 @@ def dsp_bob(
         config.bob.switch.switching_time,
         config.clock.sharing,
         config.local_oscillator.shared,
+        config.bob.dsp.phase_estimator,
         config.bob.dsp.direct_pilot_tracking,
         config.bob.dsp.process_subframes,
         config.bob.dsp.subframes_size,
@@ -192,6 +194,7 @@ def dsp_bob_params(
     switching_time: float = 0.02,
     shared_clock: bool = False,
     shared_lo: bool = False,
+    phase_estimator_cls: Type[PhaseEstimator] = ClassicalPhaseEstimator,
     direct_pilot_tracking: bool = False,
     process_subframes: bool = False,
     subframe_length: int = 0,
@@ -343,6 +346,7 @@ def dsp_bob_params(
             zc_root,
             mls_nbits,
             synchro_rate,
+            phase_estimator_cls=phase_estimator_cls,
             switching_time=switching_time,
             subframe_length=subframe_length,
             subframe_subdivision=subframe_subdivision,
@@ -1357,6 +1361,7 @@ def _dsp_bob_direct_pilot_tracking(
     zc_root: int,
     mls_nbits: int,
     synchro_rate: float,
+    phase_estimator_cls: Type[PhaseEstimator],
     switching_time: float = 0.02,
     linewidth: float = 100,
     subframe_length: int = 50_000,
@@ -1408,6 +1413,7 @@ def _dsp_bob_direct_pilot_tracking(
         zc_root (int): root of the Zadoff-Chu sequence.
         mls_nbits (int): number of bits of the Maximum Length Sequence.
         synchro_rate (float): rate of the synchronization sequence.
+        phase_estimator_cls (Type[PhaseEstimator]): class to use for the estimation of the phase of the pilot.
         subframe_length (int, optional): number of symbols to recover in each subframes. Defaults to 50000.
         subframe_subdivision (int, optional): number of subdivisions of each frame for a finer-grained global phase recovery. Defaults to 1.
         fir_size (int, optional): size of the FIR filters. Defaults to 500.
@@ -1436,8 +1442,8 @@ def _dsp_bob_direct_pilot_tracking(
         end_electronic_shot_noise = int(
             switching_time * adc_rate
         )
-        data = data[end_electronic_shot_noise:]
         electronic_shot_noise_data = data[:end_electronic_shot_noise]
+        data = data[end_electronic_shot_noise:]
 
     # Find pilot frequency
     if num_pilots < 1:
@@ -1599,7 +1605,12 @@ def _dsp_bob_direct_pilot_tracking(
     shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same")
     
     logger.info("Correcting phase noise on the whole frame")
-    phase_noise = estimate_phase(pilot_data, shot_noise_data, equi_adc_rate, linewidth)
+    if phase_estimator_cls == ClassicalPhaseEstimator:
+        phase_estimator = phase_estimator_cls(pilot_phase_filtering_size=pilot_phase_filtering_size, pilot_frequency_filtering_size=pilot_frequency_filtering_size)
+        phase_noise = phase_estimator.estimate_phase(pilot_data)
+    else:
+        phase_estimator = phase_estimator_cls(linewidth, equi_adc_rate)
+        phase_noise = phase_estimator.estimate_phase(pilot_data, shot_noise_data)
 
     clean_pilot = np.exp(-1j * phase_noise).astype(np.complex64)
 
@@ -1613,13 +1624,7 @@ def _dsp_bob_direct_pilot_tracking(
         )
         subframe_data = useful_data[begin_extended_subframe:end_subframe].astype(np.complex64)
 
-        # if dsp_debug:
-        #     dsp_debug.tones.append(pilot_data[begin_extended_subframe:end_subframe])
-
-        # clean_pilot = np.exp(-1j * phase_noise[begin_extended_subframe:end_subframe]).astype(np.complex64)
-
         logger.info("Shifting quantum data to baseband")
-        # subframe_data *= clean_pilot
         subframe_data *= shift_up[:len(subframe_data)]
 
         logger.info("Applying RRC filter")
