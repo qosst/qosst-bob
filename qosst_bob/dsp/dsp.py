@@ -27,6 +27,9 @@ import logging
 from typing import Tuple, List, Optional, Type
 from dataclasses import dataclass, field
 
+from math import gcd
+from scipy.signal import resample_poly
+
 import numpy as np
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import oaconvolve, firwin

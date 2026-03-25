@@ -73,13 +73,16 @@ class UKFPhaseEstimator:
         Returns:
             - estimated_phase: array of estimated phase values
         """
+        # Set measurement noise covariance R based on shot noise variance
         self.R = np.array([[np.var(shot_noise_data.real), 0],
                     [0, np.var(shot_noise_data.imag)]])
-        phase_diff = np.angle(pilot_data[1:] * np.conj(pilot_data[:-1]))
-        delta_omega_est = np.mean(phase_diff)
-
+        
+        # Add a quadratic fit to the pilot phase to remove large scale trends (e.g. due to frequency offset) before running the UKF.
         k = np.arange(len(pilot_data)) 
-        pilot_baseband = pilot_data * np.exp(-1j * delta_omega_est * k)
+        coeffs = np.polyfit(k[:int(2.5e7)], np.unwrap(np.angle(pilot_data)[:int(2.5e7)]), deg=2)
+        a, b, c = coeffs
+        phase_correction = np.exp(-1j * (a * k**2 + b * k + c))
+        pilot_baseband = pilot_data * phase_correction
 
         estimated_phase = run_phase_ukf(
             pilot_baseband.real,
@@ -91,7 +94,7 @@ class UKFPhaseEstimator:
             beta=self.beta,
             kappa=self.kappa,
         )
-        estimated_phase = estimated_phase + delta_omega_est * k
+        estimated_phase = estimated_phase + + a * k**2 + b * k + c
 
         return estimated_phase
 

@@ -1,13 +1,16 @@
 from qosst_bob.dsp.resample import _best_sampling_point_float
 import numpy as np
+from math import gcd
+from scipy.signal import resample_poly
+from numba import njit
 
 class BestSamplingPointTimingRecovery:
     """
     Sampling class based on finding the best sampling point using the method from "A New Timing Recovery Method for Digital Communication Systems" by J. C. Candy and G. C. Temes (1986).
     """
-    def __init__(self, sps, subframe_length, symbol_timing_oversampling):
+    def __init__(self, sps, data_length, symbol_timing_oversampling):
         self.sps = sps
-        self.subframe_length = subframe_length
+        self.data_length = data_length
         self.symbol_timing_oversampling = symbol_timing_oversampling
 
     def sample(self, data):
@@ -17,19 +20,46 @@ class BestSamplingPointTimingRecovery:
         )
         best_grid = np.round(
             best_t + self.sps * self.symbol_timing_oversampling * np.arange(
-                self.subframe_length)
+                self.data_length)
         ).astype(int)
         
-        return data[best_grid], best_grid
+        return best_grid
+
+class StaticTimingRecovery:
+    def __init__(self, sps, data_length, symbol_timing_oversampling, offset=10, initial_sampling_point=13):
+        self.data_length = data_length
+        self.sps = sps
+        self.offset = offset
+        self.symbol_timing_oversampling = symbol_timing_oversampling
+        self.initial_sampling_point = initial_sampling_point
+
+    def resample(self, data):
+        epsilon = self.offset / len(self.data_length)  # ~3.8e-7, refine this from your 13→23 measurement
+        denom = 10_000_000
+        numer = int(round(denom / (1 + epsilon)))
+        g = gcd(numer, denom)
+        data = resample_poly(
+            data, numer // g, denom // g
+        ).astype(np.complex64)
+    
+    def sample(self, data):
+        best_grid = np.round(
+            self.initial_sampling_point + self.sps * self.symbol_timing_oversampling * np.arange(
+                self.data_length)
+        ).astype(int)
+        
+        return best_grid
+
+
     
 class KalmanTimingRecovery:
     """
     Tilming recovery class based on a Kalman filter. The parameters alpha and beta can be optimized to find the best sampling point.
     """
-    def __init__(self, sps, adc_rate, subframe_length, symbol_timing_oversampling):
+    def __init__(self, sps, adc_rate, data_length, symbol_timing_oversampling):
         self.sps = sps
         self.adc_rate = adc_rate
-        self.subframe_length = subframe_length
+        self.data_length = data_length
         self.symbol_timing_oversampling = symbol_timing_oversampling
 
     def sample(
@@ -58,7 +88,7 @@ class KalmanTimingRecovery:
         grid = _timing_kalman(
                 pilot_data.real,
                 pilot_data.imag,
-                self.subframe_length,
+                self.data_length,
                 tau,
                 self.sps,
                 f_residual_corrected,
@@ -99,7 +129,8 @@ def _timing_kalman(
     """
     grid = np.zeros(num_symbols, dtype=np.float64)
 
-    P = 0.001
+    # Initial guess variance
+    P = 0.1
 
     # expected phase increment per symbol
     phase_to_samples = adc_rate / (2*np.pi*f_residual)
@@ -117,7 +148,7 @@ def _timing_kalman(
 
         # Sample the data at the predicted timing by interpolating using a cubic Farrow filter.
         mu = tau_next - tau
-        y_pilot_real, y_pilot_imag = farrow_cubic(pilot_data_real, pilot_data_imag, tau, mu) # We compute the error on the phase increment between two consecutive symbols, which should be equal to omega0 if the timing is correct.
+        y_pilot_real, y_pilot_imag = _farrow_cubic(pilot_data_real, pilot_data_imag, tau, mu) # We compute the error on the phase increment between two consecutive symbols, which should be equal to omega0 if the timing is correct.
         grid[k] = tau_next
 
         # Timing errror using the pilot tone
@@ -149,3 +180,46 @@ def _timing_kalman(
 
     return grid
 
+
+@njit
+def _farrow_cubic(
+    data_real: np.ndarray, 
+    data_imag: np.ndarray, 
+    n: float, 
+    mu: float
+    ):
+    """
+    Cubic Farrow interpolator (JIT-compiled for speed).
+
+    Parameters:
+        data_real : real part of the input signal
+        data_imag : imaginary part of the input signal
+        n  : integer sample index
+        mu : fractional delay in [0,1)
+
+    Returns:
+        y       : interpolated sample
+    """
+
+    x_1_real = data_real[n - 1]
+    x_1_imag = data_imag[n - 1]
+    x0_real = data_real[n]
+    x0_imag = data_imag[n]
+    x1_real = data_real[n + 1]
+    x1_imag = data_imag[n + 1]
+    x2_real = data_real[n + 2]
+    x2_imag = data_imag[n + 2]
+
+    a0_real = x0_real
+    a0_imag = x0_imag
+    a1_real = 0.5 * (x1_real - x_1_real)
+    a1_imag = 0.5 * (x1_imag - x_1_imag)
+    a2_real = x_1_real - 2.5 * x0_real + 2 * x1_real - 0.5 * x2_real
+    a2_imag = x_1_imag - 2.5 * x0_imag + 2 * x1_imag - 0.5 * x2_imag
+    a3_real = 0.5 * (x2_real - x_1_real) + 1.5 * (x0_real - x1_real)
+    a3_imag = 0.5 * (x2_imag - x_1_imag) + 1.5 * (x0_imag - x1_imag)
+
+    y_real = a0_real + mu * (a1_real + mu * (a2_real + mu * a3_real))
+    y_imag = a0_imag + mu * (a1_imag + mu * (a2_imag + mu * a3_imag))
+
+    return y_real, y_imag
