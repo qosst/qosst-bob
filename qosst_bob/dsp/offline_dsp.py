@@ -64,6 +64,12 @@ def offline_dsp(
     warnings.warn("Offline DSP is experimental.")
     logger.info("Starting offline DSP")
 
+    if config.bob.switch.switching_time:
+        end_electronic_shot_noise = int(
+            config.bob.switch.switching_time * config.bob.adc.rate
+        )
+        electronic_shot_noise_data = data[:end_electronic_shot_noise]
+        
     quantum_symbols, params, dsp_debug = dsp_bob(data, config)
 
     # Correct global phase of each frame of quantum symbols

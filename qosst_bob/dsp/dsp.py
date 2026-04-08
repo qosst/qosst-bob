@@ -44,7 +44,7 @@ from qosst_core.synchronization import SynchronizationSequence
 from qosst_core.dsp.phase_estimator import PhaseEstimator
 from qosst_core.dsp.timing_estimator import TimingRecoveryEstimator
 from qosst_bob.dsp.phase_estimation import ClassicalPhaseEstimator
-from qosst_bob.dsp.timing_recovery import BestSamplingPointTimingRecovery
+from qosst_bob.dsp.timing_recovery import BestSamplingPointTimingRecovery, pulse_sampling
 
 from .synchro import synchronize
 from .pilots import (
@@ -120,9 +120,10 @@ class SpecialDSPParams:
     schema: DetectionSchema  #: Detection schema to know how to interpret the data.
     elec_noise_estimation_ratio: Optional[float] = 1.0  #: Ratio of electronic noise samples to analyze
     elec_shot_noise_estimation_ratio: Optional[float] = 1.0  #: Ratio of electronic and shot noise samples to analyze
+    pulsed_sampling: Optional[bool] = False  #: Whether the pulsed sampling is used for the estimation of noise parameters.
 
     def __str__(self) -> str:
-        return f"Symbol rate = {self.symbol_rate*1e-6} MBaud, ADC Rate = {self.adc_rate*1e-9} GSamples/s, Roll Off = {self.roll_off}, Frequency shift = {self.frequency_shift*1e-6} MHz, Detection schema = {str(self.schema)}, Ratio of electronic noise samples kept = {self.elec_noise_estimation_ratio}, Ratio of electronic and shot noise samples kept = {self.elec_shot_noise_estimation_ratio}"
+        return f"Symbol rate = {self.symbol_rate*1e-6} MBaud, ADC Rate = {self.adc_rate*1e-9} GSamples/s, Roll Off = {self.roll_off}, Frequency shift = {self.frequency_shift*1e-6} MHz, Detection schema = {str(self.schema)}, Ratio of electronic noise samples kept = {self.elec_noise_estimation_ratio}, Ratio of electronic and shot noise samples kept = {self.elec_shot_noise_estimation_ratio}, Pulsed sampling = {self.pulsed_sampling}"
 
 
 def dsp_bob(
@@ -134,7 +135,6 @@ def dsp_bob(
     Args:
         data (np.ndarray): the data on which to apply the DSP.
         config (Configuration): the configuration object.
-        electronic_shot_noise_data (np.ndarray, optional): the electronic shot noise data.
 
     Returns:
         Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]: array of symbols, SpecialDSPParams containing data to apply the exact same DSP to other data and DSPDebug containing debug information,.
@@ -164,6 +164,7 @@ def dsp_bob(
         config.local_oscillator.shared,
         config.bob.dsp.phase_estimator,
         config.bob.dsp.timing_recovery_estimator,
+        config.bob.dsp.pulsed_sampling,
         config.bob.dsp.direct_pilot_tracking,
         config.bob.dsp.process_subframes,
         config.bob.dsp.subframes_size,
@@ -199,11 +200,12 @@ def dsp_bob_params(
     mls_nbits: int,
     synchro_rate: float,
     switching_time: float = 0.02,
-    linewidth: float = 5e3,
+    linewidth: float = 100,
     shared_clock: bool = False,
     shared_lo: bool = False,
     phase_estimator_cls: Type[PhaseEstimator] = ClassicalPhaseEstimator,
-    timing_recovery_estimator_cls: Type[TimingRecoveryEstimator] = BestSamplingPointTimingRecovery,
+    timing_estimator_cls: Type[TimingRecoveryEstimator] = BestSamplingPointTimingRecovery,
+    pulsed_sampling: bool = False,
     direct_pilot_tracking: bool = False,
     process_subframes: bool = False,
     subframe_length: int = 0,
@@ -356,7 +358,8 @@ def dsp_bob_params(
             mls_nbits,
             synchro_rate,
             phase_estimator_cls=phase_estimator_cls,
-            timing_recovery_estimator_cls=timing_recovery_estimator_cls,
+            timing_estimator_cls=timing_estimator_cls,
+            pulsed_sampling=pulsed_sampling,
             switching_time=switching_time,
             linewidth=linewidth,
             subframe_length=subframe_length,
@@ -1374,8 +1377,9 @@ def _dsp_bob_direct_pilot_tracking(
     synchro_rate: float,
     phase_estimator_cls: Type[PhaseEstimator],
     timing_estimator_cls: Type[TimingRecoveryEstimator],
+    pulsed_sampling: bool = False,
     switching_time: float = 0.02,
-    linewidth: float = 5e3,
+    linewidth: float = 100,
     subframe_length: int = 50_000,
     subframe_subdivision: int = 1,
     fir_size: int = 500,
@@ -1576,34 +1580,9 @@ def _dsp_bob_direct_pilot_tracking(
         dsp_debug.tones = []
         dsp_debug.uncorrected_data = []
 
-    begin_subframe = 0
-    end_subframe = int(np.ceil(subframe_length * (sps + 1) - 0.5))
-    result = []
-    num_symbols_recovered = 0
-
     # Number of samples to include from the previous subframe to account for
     # the boundary conditions of the filters.
     num_samples_previous_subframe = max(pilot_phase_filtering_size, fir_size)
-
-    # Pre-compute the RRC filter.
-    _, rrc_filter = root_raised_cosine_filter(
-        int(10 * sps + 2),
-        roll_off,
-        1 / symbol_rate,
-        equi_adc_rate,
-    )
-    rrc_filter = (rrc_filter[1:] / np.sqrt(sps)).astype(np.complex64)
-
-    # Pre-compute the complex exponential for shifting.
-    shift_size = subframe_length * (sps + 1) + num_samples_previous_subframe
-    shift_up = np.exp(
-        1j
-        * 2
-        * np.pi
-        * np.arange(shift_size)
-        * (f_pilot_1 - frequency_shift)
-        / equi_adc_rate
-    ).astype(np.complex64)
 
     # Pre-compute the filter extracting the pilot tone.
     pilot_bp_filter = (firwin(fir_size, tone_filtering_cutoff / equi_adc_rate) * np.exp(
@@ -1613,65 +1592,48 @@ def _dsp_bob_direct_pilot_tracking(
     # Correct the phase noise on the whole frame before starting to extract symbols, 
     # to avoid the boundary effects of the filters on the subframes.
     logger.info("Recovering first pilot tone")
-    pilot_data = oaconvolve(useful_data, pilot_bp_filter, mode="same")
-    shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same")
-    
-    logger.info("Correcting phase noise on the whole frame")
-    if phase_estimator_cls == ClassicalPhaseEstimator:
-        phase_estimator = phase_estimator_cls(pilot_phase_filtering_size=pilot_phase_filtering_size, pilot_frequency_filtering_size=pilot_frequency_filtering_size)
-        phase_noise = phase_estimator.estimate_phase(pilot_data)
-    else:
-        phase_estimator = phase_estimator_cls(linewidth, equi_adc_rate)
-        phase_noise = phase_estimator.estimate_phase(pilot_data, shot_noise_data)
+    pilot_data = oaconvolve(useful_data, pilot_bp_filter, mode="same") * np.exp(
+        -1j * 2 * np.pi * np.arange(len(useful_data)) * f_pilot_real_1 / equi_adc_rate
+    )
+    shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same") * np.exp(
+        -1j * 2 * np.pi * np.arange(len(electronic_shot_noise_data)) * f_pilot_real_1 / equi_adc_rate
+    )
 
+    if dsp_debug:
+        dsp_debug.tones.append(pilot_data)
+    
+    logger.info("Correcting phase noise on the whole frame with estimator {}".format(phase_estimator_cls.__name__))
+    phase_estimator = phase_estimator_cls(
+        adc_rate=equi_adc_rate,
+        linewidth=linewidth,
+        pilot_phase_filtering_size=pilot_phase_filtering_size, 
+        pilot_frequency_filtering_size=pilot_frequency_filtering_size
+    )
+    phase_noise = phase_estimator.estimate_phase(
+        pilot_data=pilot_data, 
+        shot_noise_data=shot_noise_data
+    )
+    phase_noise = phase_noise + 2 * np.pi * f_pilot_real_1 * np.arange(len(phase_noise)) / equi_adc_rate
     clean_pilot = np.exp(-1j * phase_noise).astype(np.complex64)
 
     logger.info("Cancelling phase noise")
     useful_data = useful_data.astype(np.complex64) * clean_pilot
 
-    timing_estimator = timing_estimator_cls(sps, subframe_length, symbol_timing_oversampling)
-
-    while num_symbols_recovered < num_symbols:
-        # Include more samples to account for the boundary condition of filters.
-        begin_extended_subframe = max(
-            begin_subframe - num_samples_previous_subframe, 0
-        )
-        subframe_data = useful_data[begin_extended_subframe:end_subframe].astype(np.complex64)
-
-        logger.info("Shifting quantum data to baseband")
-        subframe_data *= shift_up[:len(subframe_data)]
-
-        logger.info("Applying RRC filter")
-        subframe_data = oaconvolve(subframe_data, rrc_filter, "same")
-
-        # Ignore the extra samples at the beginning of the frame
-        subframe_data = subframe_data[begin_subframe - begin_extended_subframe:]
-
-        logger.info("Finding best decision point")
-        if symbol_timing_oversampling != 1:
-            subframe_data = upsample(subframe_data, symbol_timing_oversampling, 2)
-
-        best_grid = timing_estimator.estimate_timing(subframe_data)
-
-        logger.info("Downsampling")
-        subframe_data = subframe_data[best_grid]
-        last_index = begin_subframe + best_grid[-1] / symbol_timing_oversampling
-
-        logger.info("Collecting %i symbols in the frame", len(subframe_data))
-        chunk_length = len(subframe_data) // subframe_subdivision
-        for i in range(subframe_subdivision):
-            start = i * chunk_length
-            if i != subframe_subdivision - 1:
-                result.append(subframe_data[start:start + chunk_length])
-            else:
-                result.append(subframe_data[start:])
-        num_symbols_recovered += len(subframe_data)
-
-        begin_subframe = int(last_index + sps / 2 - 0.5)
-        end_subframe = int(begin_subframe + subframe_length * (sps + 1) - 0.5)
-
-        if dsp_debug:
-            dsp_debug.uncorrected_data.append(np.array([]))
+    logger.info("Sampling symbols with estimator {}".format(timing_estimator_cls.__name__))
+    timing_estimator = timing_estimator_cls(
+        sps = sps, 
+        adc_rate = equi_adc_rate,
+        num_symbols = num_symbols,
+        subframe_length = subframe_length,
+        symbol_timing_oversampling = symbol_timing_oversampling,
+        roll_off = roll_off,
+        symbol_rate = symbol_rate,
+        f_pilot_1 = f_pilot_1,
+        frequency_shift = frequency_shift,
+        num_samples_previous_subframe = num_samples_previous_subframe,
+        pulsed_sampling = pulsed_sampling,
+    )
+    result, sampled_grid = timing_estimator.sample(useful_data)
 
     special_params = SpecialDSPParams(
         symbol_rate=symbol_rate,
@@ -1679,6 +1641,7 @@ def _dsp_bob_direct_pilot_tracking(
         roll_off=roll_off,
         frequency_shift=frequency_shift + f_beat,
         schema=schema,
+        pulsed_sampling=pulsed_sampling,
     )
     return result, special_params, dsp_debug
 
@@ -1735,7 +1698,8 @@ def special_dsp(
         params.frequency_shift,
         params.schema,
         params.elec_noise_estimation_ratio,
-        params.elec_shot_noise_estimation_ratio
+        params.elec_shot_noise_estimation_ratio,
+        params.pulsed_sampling,
     )
 
 
@@ -1779,7 +1743,8 @@ def _special_dsp_params(
     frequency_shift: float,
     _schema: DetectionSchema,
     elec_noise_estimation_ratio: float,
-    elec_shot_noise_estimation_ratio: float
+    elec_shot_noise_estimation_ratio: float,
+    pulsed_sampling: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Special DSP to apply on the electronic and electronic and shot noise samples
@@ -1841,6 +1806,21 @@ def _special_dsp_params(
     elec_shot_noise_filtered = (
         1 / np.sqrt(sps) * oaconvolve(elec_shot_noise_bb, rrc_filter, "same")
     )
+
+    if pulsed_sampling:
+        #Segment into symbols by averaging over sps samples, and compute variance for each symbol
+        num_symbols = int(1000000)
+        elec_noise_filtered = pulse_sampling(
+            elec_noise_filtered,
+            sps=sps,
+            num_symbols=num_symbols
+        )
+        elec_shot_noise_filtered = pulse_sampling(
+            elec_shot_noise_filtered,
+            sps=sps,
+            num_symbols=num_symbols
+        )
+        
     logger.info("DSP on elec and elec+shot noise finished.")
 
     return elec_noise_filtered, elec_shot_noise_filtered

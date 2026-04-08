@@ -3,101 +3,308 @@ import numpy as np
 from math import gcd
 from scipy.signal import resample_poly
 from numba import njit
+from .resample import (
+    _best_sampling_point_float,
+    upsample
+)
+from scipy.signal import lfilter, butter, sosfiltfilt
+from qosst_core.comm.filters import root_raised_cosine_filter
+from scipy.signal import oaconvolve
 
-class BestSamplingPointTimingRecovery:
+from qosst_core.dsp.timing_estimator import TimingRecoveryEstimator
+
+class BestSamplingPointTimingRecovery(TimingRecoveryEstimator):
     """
     Sampling class based on finding the best sampling point using the method from "A New Timing Recovery Method for Digital Communication Systems" by J. C. Candy and G. C. Temes (1986).
     """
-    def __init__(self, sps, data_length, symbol_timing_oversampling):
+    def __init__(
+            self, 
+            sps: float,
+            adc_rate: float,
+            num_symbols: int,
+            subframe_length: int,
+            symbol_timing_oversampling: int,
+            roll_off: float,
+            symbol_rate: float,
+            f_pilot_1: float,
+            frequency_shift: float,
+            num_samples_previous_subframe: int,
+            pulse_sampling: bool = False,
+            **kwargs,
+            ):
         self.sps = sps
-        self.data_length = data_length
+        self.adc_rate = adc_rate
         self.symbol_timing_oversampling = symbol_timing_oversampling
+        self.num_symbols = num_symbols
+        self.subframe_length = subframe_length
+        self.roll_off = roll_off
+        self.symbol_rate = symbol_rate
+        self.f_pilot_1 = f_pilot_1
+        self.frequency_shift = frequency_shift
+        self.num_samples_previous_subframe = num_samples_previous_subframe
+        self.pulse_sampling = pulse_sampling
 
-    def sample(self, data):
-        best_t = _best_sampling_point_float(
-            data,
-            self.sps * self.symbol_timing_oversampling
+    def sample(self, data, **kwargs):
+        rrc_filter, shift_up = pre_compute_filters(
+            shift_size = self.subframe_length * (self.sps + 1) + self.num_samples_previous_subframe,
+            sps = self.sps,
+            roll_off = self.roll_off,
+            symbol_rate = self.symbol_rate,
+            adc_rate = self.adc_rate,
+            f_pilot_1 = self.f_pilot_1,
+            frequency_shift = self.frequency_shift,
         )
-        best_grid = np.round(
-            best_t + self.sps * self.symbol_timing_oversampling * np.arange(
-                self.data_length)
-        ).astype(int)
-        
-        return best_grid
 
-class StaticTimingRecovery:
-    def __init__(self, sps, data_length, symbol_timing_oversampling, offset=10, initial_sampling_point=13):
-        self.data_length = data_length
+        begin_subframe = 0
+        end_subframe = int(np.ceil(self.subframe_length * (self.sps + 1) - 0.5))
+        result = []
+        num_symbols_recovered = 0
+        while num_symbols_recovered < self.num_symbols:
+            # Include more samples to account for the boundary condition of filters.
+            begin_extended_subframe = max(
+                begin_subframe - self.num_samples_previous_subframe, 0
+            )
+            subframe_data = data[begin_extended_subframe:end_subframe].astype(np.complex64)
+
+            subframe_data *= shift_up[:len(subframe_data)]
+
+            subframe_data = oaconvolve(subframe_data, rrc_filter, "same")
+
+            # Ignore the extra samples at the beginning of the frame
+            subframe_data = subframe_data[begin_subframe - begin_extended_subframe:]
+
+            if self.symbol_timing_oversampling != 1:
+                subframe_data = upsample(subframe_data, self.symbol_timing_oversampling, 2)
+
+            best_t = _best_sampling_point_float(
+                subframe_data,
+                self.sps * self.symbol_timing_oversampling
+            )
+            best_grid = np.round(
+                best_t + self.sps * self.symbol_timing_oversampling * np.arange(
+                    self.subframe_length)
+            ).astype(int)
+
+            if self.pulse_sampling:
+                subframe_data = pulse_sampling(
+                    subframe_data,
+                    self.sps * self.symbol_timing_oversampling,
+                    self.subframe_length
+                )
+            else:
+                subframe_data = subframe_data[best_grid]
+
+            last_index = begin_subframe + best_grid[-1] / self.symbol_timing_oversampling
+
+            result.append(subframe_data)
+            num_symbols_recovered += len(subframe_data)
+
+            begin_subframe = int(last_index + self.sps / 2 - 0.5)
+            end_subframe = int(begin_subframe + self.subframe_length * (self.sps + 1) - 0.5)
+
+        return result, best_grid
+
+class StaticTimingRecovery(TimingRecoveryEstimator):
+
+    def __init__(
+            self, 
+            sps: float,
+            adc_rate: float,
+            num_symbols: int,
+            subframe_length: int,
+            symbol_timing_oversampling: int,
+            roll_off: float,
+            symbol_rate: float,
+            f_pilot_1: float,
+            frequency_shift: float,
+            offset: float = 10, 
+            initial_sampling_point: float = 13,
+            pulse_sampling: bool = False,
+            **kwargs,
+        ):
         self.sps = sps
-        self.offset = offset
+        self.adc_rate = adc_rate
+        self.num_symbols = num_symbols
+        self.subframe_length = subframe_length
         self.symbol_timing_oversampling = symbol_timing_oversampling
+        self.roll_off = roll_off
+        self.symbol_rate = symbol_rate
+        self.f_pilot_1 = f_pilot_1
+        self.frequency_shift = frequency_shift
+        self.offset = offset
         self.initial_sampling_point = initial_sampling_point
+        self.pulse_sampling = pulse_sampling
+    
+    def sample(self, data, **kwargs):
+        result = []
+        rrc_filter, shift_up = pre_compute_filters(
+            shift_size = len(data),
+            sps = self.sps,
+            roll_off = self.roll_off,
+            symbol_rate = self.symbol_rate,
+            adc_rate = self.adc_rate,
+            f_pilot_1 = self.f_pilot_1,
+            frequency_shift = self.frequency_shift
+        )
 
-    def resample(self, data):
-        epsilon = self.offset / len(self.data_length)  # ~3.8e-7, refine this from your 13→23 measurement
+        epsilon = self.offset / len(data)
         denom = 10_000_000
         numer = int(round(denom / (1 + epsilon)))
         g = gcd(numer, denom)
         data = resample_poly(
             data, numer // g, denom // g
         ).astype(np.complex64)
-    
-    def sample(self, data):
+        data *= shift_up[:len(data)]
+        data = oaconvolve(data, rrc_filter, "same")
         best_grid = np.round(
-            self.initial_sampling_point + self.sps * self.symbol_timing_oversampling * np.arange(
-                self.data_length)
+            self.initial_sampling_point + self.sps * self.symbol_timing_oversampling * np.arange(self.num_symbols)
         ).astype(int)
+
+        if self.pulse_sampling:
+            data = pulse_sampling(
+                data,
+                self.sps * self.symbol_timing_oversampling,
+                self.num_symbols
+            )
+        else:
+            data = data[best_grid]
         
-        return best_grid
+        for i in range(0, self.num_symbols // self.subframe_length):
+            subframe = data[i*self.subframe_length:(i+1)*self.subframe_length]
+            if len(subframe) > 0:
+                result.append(subframe)
+        return result, best_grid
 
-
-    
-class KalmanTimingRecovery:
+class KalmanTimingRecovery(TimingRecoveryEstimator):
     """
     Tilming recovery class based on a Kalman filter. The parameters alpha and beta can be optimized to find the best sampling point.
     """
-    def __init__(self, sps, adc_rate, data_length, symbol_timing_oversampling):
+    def __init__(
+            self, 
+            sps: float, 
+            adc_rate: float, 
+            num_symbols: int,
+            subframe_length: int,
+            symbol_timing_oversampling: int,
+            roll_off: float,
+            symbol_rate: float,
+            f_pilot_1: float,
+            frequency_shift: float,
+            block_size: int = 10000,
+            processed_variance: float = 1e-10,
+            initial_variance: float = 0.1,
+            pulse_sampling: bool = False,
+            **kwargs,
+        ):
         self.sps = sps
         self.adc_rate = adc_rate
-        self.data_length = data_length
+        self.num_symbols = num_symbols
+        self.subframe_length = subframe_length
         self.symbol_timing_oversampling = symbol_timing_oversampling
+        self.roll_off = roll_off
+        self.symbol_rate = symbol_rate
+        self.f_pilot_1 = f_pilot_1
+        self.frequency_shift = frequency_shift
+        self.block_size = block_size
+        self.processed_variance = processed_variance
+        self.initial_variance = initial_variance
+        self.pulse_sampling = pulse_sampling
 
     def sample(
         self,
         data: np.ndarray,
         pilot_data: np.ndarray,
+        **kwargs,
     ):
+        rrc_filter, shift_up = pre_compute_filters(
+            shift_size = len(data),
+            sps = self.sps,
+            roll_off = self.roll_off,
+            symbol_rate = self.symbol_rate,
+            adc_rate = self.adc_rate,
+            f_pilot_1 = self.f_pilot_1,
+            frequency_shift = self.frequency_shift
+        )
+
         # Find a coarse estimate of the residual frequency offset by looking at the phase of the pilot tone. We average the phase increment over blocks of samples to reduce noise.
-        block = 10000
-        pilot_data = pilot_data[:int(2.5e7)]
+        pilot_data = pilot_data[:int(self.num_symbols * self.sps * self.symbol_timing_oversampling)]
         dphi = np.angle(pilot_data[1:] * np.conj(pilot_data[:-1]))
-        dphi_blocked = dphi[:len(dphi)//block*block].reshape(-1, block).mean(axis=1)
+        dphi_blocked = dphi[:len(dphi)//self.block_size*self.block_size].reshape(-1, self.block_size).mean(axis=1)
 
         # From block-averaged dphi, compute the measurement noise variance R and the residual frequency offset f_residual, which will be used in the Kalman filter.
-        mean_dphi_per_sample = np.mean(dphi_blocked) / block 
+        mean_dphi_per_sample = np.mean(dphi_blocked) / self.block_size
         f_residual_corrected = mean_dphi_per_sample * self.adc_rate / (2*np.pi)
         dphi_zero_mean = dphi - np.mean(dphi)
         R = np.var(dphi_zero_mean)
 
         # Get the initial sampling point
-        tau = _best_sampling_point_float(data[:1250000], self.sps)
+        tau = _best_sampling_point_float(data[:int(self.subframe_length * self.sps)], self.sps)
 
-        # Get process noise variance of sps. 
-        Q_sps = 1e-10
-
-        grid = _timing_kalman(
+        best_grid = _timing_kalman(
                 pilot_data.real,
                 pilot_data.imag,
-                self.data_length,
+                self.num_symbols,
                 tau,
                 self.sps,
                 f_residual_corrected,
                 self.adc_rate,
-                Q_sps,
+                self.processed_variance,
+                self.initial_variance,
                 R,
             )
-        return grid
+        
+        data *= shift_up[:len(data)]
+        data = oaconvolve(data, rrc_filter, "same")
+        
+        result = []
+        for i in range(0, self.num_symbols // self.subframe_length):
+            subgrid = best_grid[i*self.subframe_length:(i+1)*self.subframe_length]
+            if self.pulse_sampling:
+                subframe = data[subgrid[0] - self.sps * self.symbol_timing_oversampling / 2 - 0.5 : subgrid[-1] + self.sps * self.symbol_timing_oversampling / 2 + 0.5]
+                subframe = pulse_sampling(
+                    subframe,
+                    self.sps * self.symbol_timing_oversampling,
+                    self.subframe_length
+                )
+            else:
+                subframe = data[subgrid.astype(int)]
+
+            if len(subframe) > 0:
+                result.append(subframe)
+
+        return result, best_grid
     
+def pre_compute_filters(
+        shift_size: int,
+        sps: float,
+        roll_off: float,
+        symbol_rate: float,
+        adc_rate: float,
+        f_pilot_1: float,
+        frequency_shift: float):
+    """
+    Pre-compute the filters used in the timing recovery to reduce the computational load during the actual timing recovery.
+    """
+    _, rrc_filter = root_raised_cosine_filter(
+        int(10 * sps + 2),
+        roll_off,
+        1 / symbol_rate,
+        adc_rate,
+    )
+    rrc_filter = (rrc_filter[1:] / np.sqrt(sps)).astype(np.complex64)
+    
+    shift_up = np.exp(
+        1j
+        * 2
+        * np.pi
+        * np.arange(shift_size)
+        * (f_pilot_1 - frequency_shift)
+        / adc_rate
+    ).astype(np.complex64)
+
+    return rrc_filter, shift_up
+
+
 @njit
 def _timing_kalman(
         pilot_data_real: np.ndarray,
@@ -108,6 +315,7 @@ def _timing_kalman(
         f_residual: float,
         adc_rate: float,
         Q_sps: float,
+        P_initial: float,
         R: float
         ) -> np.ndarray:
     """
@@ -130,7 +338,7 @@ def _timing_kalman(
     grid = np.zeros(num_symbols, dtype=np.float64)
 
     # Initial guess variance
-    P = 0.1
+    P = P_initial
 
     # expected phase increment per symbol
     phase_to_samples = adc_rate / (2*np.pi*f_residual)
@@ -172,9 +380,7 @@ def _timing_kalman(
         sps_next = sps + K * e
         P = (1 - K*H) * P_pred
 
-        # integrate tau deterministically
-        alpha = 0.00 # Small drift for tau also
-        tau_next += sps_next + alpha * e
+        tau_next += sps_next
 
         y_pilot_prev_real, y_pilot_prev_imag = y_pilot_real, y_pilot_imag
 
@@ -223,3 +429,21 @@ def _farrow_cubic(
     y_imag = a0_imag + mu * (a1_imag + mu * (a2_imag + mu * a3_imag))
 
     return y_real, y_imag
+
+
+def pulse_sampling(
+        data: np.ndarray,
+        sps: float,
+        num_symbols: int,
+    ):
+    """
+    Sample the signal using pulse sampling, which consists in convolving the signal with a rectangular pulse of width equal to the symbol period, and then sampling at the symbol rate. 
+    This is equivalent to integrating the signal over each symbol period, which can be more robust to noise than sampling at a single point.
+    """
+    sps = int(sps)
+    hn = (
+        (1/sps) * np.ones(sps)
+    )
+    pulse_symbols = lfilter(hn, [1], data)[sps-1::sps][:num_symbols]
+    assert len(pulse_symbols) == num_symbols, f"Expected {num_symbols} symbols, got {len(pulse_symbols)}"
+    return pulse_symbols

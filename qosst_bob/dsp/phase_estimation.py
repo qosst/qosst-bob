@@ -2,12 +2,15 @@ import numpy as np
 import numpy as np
 from numba import njit
 from scipy.ndimage import uniform_filter1d
+from scipy.signal import welch
+from qosst_core.dsp.phase_estimator import PhaseEstimator
 
-class ClassicalPhaseEstimator:
+class ClassicalPhaseEstimator(PhaseEstimator):
     def __init__(
             self,
-            pilot_phase_filtering_size=1, 
-            pilot_frequency_filtering_size=1
+            pilot_phase_filtering_size,
+            pilot_frequency_filtering_size,
+            **kwargs
             ):
         self.pilot_phase_filtering_size = pilot_phase_filtering_size
         self.pilot_frequency_filtering_size = pilot_frequency_filtering_size
@@ -15,6 +18,7 @@ class ClassicalPhaseEstimator:
     def estimate_phase(
             self, 
             pilot_data: np.ndarray,
+            **kwargs,
             ) -> np.ndarray:
         """
         Estimate the phase of the signal using the pilot tone.
@@ -22,7 +26,6 @@ class ClassicalPhaseEstimator:
         pilot_angle = np.angle(pilot_data)
 
         if self.pilot_phase_filtering_size > 1 or self.pilot_frequency_filtering_size > 1:
-            print("Filtering pilot")
             # The unwrapped angle can grow into a large number, but the full
             # precision is needed. Convert to double.
             pilot_angle = np.unwrap(pilot_angle.astype('d'))
@@ -43,16 +46,15 @@ class ClassicalPhaseEstimator:
 class UKFPhaseEstimator:
     def __init__(
             self,
-            adc_rate: float,
-            linewidth: float, 
-            alpha: float =1e-3, 
-            beta: float =2.0, 
-            kappa: float =0.0,
-        ):
+            linewidth,
+            adc_rate,
+            alpha=1e-3,
+            beta=2.0,
+            kappa=0.0,
+            **kwargs
+            ):
         self.linewidth = linewidth
         self.adc_rate = adc_rate
-        self.Q = 2 * np.pi * self.linewidth * (1/self.adc_rate)
-        self.R = None
         self.alpha = alpha
         self.beta = beta
         self.kappa = kappa
@@ -74,7 +76,8 @@ class UKFPhaseEstimator:
             - estimated_phase: array of estimated phase values
         """
         # Set measurement noise covariance R based on shot noise variance
-        self.R = np.array([[np.var(shot_noise_data.real), 0],
+        Q = 2 * np.pi * self.linewidth * (1/self.adc_rate)
+        R = np.array([[np.var(shot_noise_data.real), 0],
                     [0, np.var(shot_noise_data.imag)]])
         
         # Add a quadratic fit to the pilot phase to remove large scale trends (e.g. due to frequency offset) before running the UKF.
@@ -87,8 +90,8 @@ class UKFPhaseEstimator:
         estimated_phase = run_phase_ukf(
             pilot_baseband.real,
             pilot_baseband.imag,
-            self.Q,
-            self.R,
+            Q,
+            R,
             A = np.mean(np.abs(pilot_data)),
             alpha=self.alpha,
             beta=self.beta,
@@ -124,7 +127,7 @@ def run_phase_ukf(
     """
     assert z_real.shape == z_imag.shape, "Real and imaginary measurement arrays must have the same shape"
     assert R.shape == (2, 2), "Measurement noise covariance R must be a 2x2 matrix"
-    assert Q > 0, "Process noise covariance Q must be positive"
+    assert Q >= 0, "Process noise covariance Q must be positive"
 
     R00 = R[0, 0]
     R01 = R[0, 1]
@@ -243,3 +246,129 @@ def run_phase_ukf(
         phase_est[k] = x
 
     return phase_est
+
+
+class WienerPhaseEstimator(PhaseEstimator):
+    def __init__(
+            self,
+            adc_rate,
+            nperseg: int = 32768,
+            bpf_cutoff_hz: float = None,
+            linewidth: float = None,
+            **kwargs
+        ):
+        self.adc_rate = adc_rate
+        self.nperseg = nperseg
+        self.bpf_cutoff_hz = bpf_cutoff_hz if bpf_cutoff_hz is not None else adc_rate / 8
+        # If linewidth is given, use the model-based Wiener filter.
+        # The signal PSD is modelled as a Lorentzian (laser phase random walk):
+        #   S_laser(f) = linewidth / (2π f²)
+        # which is the continuous-time PSD of a Wiener process whose increments
+        # have variance Q = 2π * linewidth / fs per sample.
+        self.linewidth = linewidth
+
+    def _compute_noise_floor(
+        self,
+        pilot_data: np.ndarray,
+        shot_noise_data,
+        freqs: np.ndarray,
+        S_total,
+    ):
+        """Return S_eta on the grid `freqs` (fftshift order)."""
+        if shot_noise_data is not None:
+            A_pilot = np.abs(pilot_data).mean()
+            freqs_sn, S_Q = welch(
+                shot_noise_data.imag,
+                fs=self.adc_rate,
+                nperseg=self.nperseg,
+                return_onesided=False,
+            )
+            freqs_sn = np.fft.fftshift(freqs_sn)
+            S_Q      = np.fft.fftshift(S_Q)
+            return np.interp(freqs, freqs_sn, S_Q) / (A_pilot ** 2)
+        else:
+            hf_mask = np.abs(freqs) > (self.adc_rate / 4)
+            if hf_mask.sum() == 0:
+                hf_mask = np.abs(freqs) > (self.adc_rate / 8)
+            return np.median(S_total[hf_mask]) * np.ones_like(freqs)
+
+    def estimate_phase(
+        self,
+        pilot_data: np.ndarray,
+        shot_noise_data: np.ndarray = None,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Estimates the pilot phase via a Wiener filter.
+
+        Two modes:
+        - Model-based (linewidth is set): the signal PSD is the theoretical
+          Lorentzian S_laser(f) = linewidth/(2π f²) of a laser phase random walk.
+          H(f) = S_laser / (S_laser + S_eta).  Does not need the pilot phase PSD;
+          works even at low pilot SNR.
+        - Data-based (linewidth is None): estimates S_total from the Welch PSD of
+          the pilot phase, then H = clip(1 - S_eta/S_total, 0, 1).
+
+        In both modes, S_eta is taken from the shot noise quadrature PSD scaled
+        by the pilot amplitude (S_Q/A²), or falls back to the HF tail of S_total.
+        H is forced to 0 above bpf_cutoff_hz.
+        """
+        N = len(pilot_data)
+        pilot_phase = np.unwrap(np.angle(pilot_data))
+
+        if self.linewidth is not None:
+            # ── Model-based Wiener ────────────────────────────────────────────
+            # Build H on the full FFT grid to avoid an interpolation step.
+            freqs = np.fft.fftshift(np.fft.fftfreq(N, d=1.0 / self.adc_rate))
+
+            # S_laser(f) = linewidth / (2π f²), with H→1 at DC.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                S_laser = np.where(
+                    freqs == 0,
+                    np.inf,
+                    self.linewidth / (2.0 * np.pi * freqs ** 2),
+                )
+
+            # Noise floor (shot-noise-based or HF fallback).
+            # For the fallback we still need S_total on a Welch grid.
+            if shot_noise_data is None:
+                freqs_w, S_total = welch(
+                    pilot_phase, fs=self.adc_rate,
+                    nperseg=self.nperseg, return_onesided=False,
+                )
+                freqs_w = np.fft.fftshift(freqs_w)
+                S_total = np.fft.fftshift(S_total)
+            else:
+                freqs_w = S_total = None
+
+            S_eta = self._compute_noise_floor(pilot_data, shot_noise_data, freqs, S_total)
+
+            # H(f) = S_laser / (S_laser + S_eta)
+            H = S_laser / (S_laser + np.maximum(S_eta, 0))
+            H = np.clip(np.where(np.isfinite(H), H, 1.0), 0.0, 1.0)
+            H[np.abs(freqs) > self.bpf_cutoff_hz] = 0.0
+
+            H_full = np.fft.ifftshift(H)
+
+        else:
+            # ── Data-based Wiener ─────────────────────────────────────────────
+            freqs_w, S_total = welch(
+                pilot_phase,
+                fs=self.adc_rate,
+                nperseg=self.nperseg,
+                return_onesided=False,
+            )
+            freqs_w = np.fft.fftshift(freqs_w)
+            S_total = np.fft.fftshift(S_total)
+
+            S_eta_est = self._compute_noise_floor(pilot_data, shot_noise_data, freqs_w, S_total)
+
+            H_welch = np.clip(1.0 - S_eta_est / np.maximum(S_total, S_eta_est), 0.0, 1.0)
+            H_welch[np.abs(freqs_w) > self.bpf_cutoff_hz] = 0.0
+
+            freqs_full = np.fft.fftshift(np.fft.fftfreq(N, d=1.0 / self.adc_rate))
+            H_full = np.fft.ifftshift(np.interp(freqs_full, freqs_w, H_welch))
+
+        PILOT_F = np.fft.fft(pilot_phase)
+        phi_est = np.fft.ifft(H_full * PILOT_F).real
+        return phi_est
