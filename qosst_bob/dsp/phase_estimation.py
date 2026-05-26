@@ -4,6 +4,12 @@ from numba import njit
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import welch
 from qosst_core.dsp.phase_estimator import PhaseEstimator
+import logging
+from functools import lru_cache
+from scipy.signal import savgol_coeffs, savgol_filter, oaconvolve
+
+
+logger = logging.getLogger(__name__)
 
 class ClassicalPhaseEstimator(PhaseEstimator):
     def __init__(
@@ -301,74 +307,261 @@ class WienerPhaseEstimator(PhaseEstimator):
         """
         Estimates the pilot phase via a Wiener filter.
 
-        Two modes:
-        - Model-based (linewidth is set): the signal PSD is the theoretical
-          Lorentzian S_laser(f) = linewidth/(2π f²) of a laser phase random walk.
-          H(f) = S_laser / (S_laser + S_eta).  Does not need the pilot phase PSD;
-          works even at low pilot SNR.
-        - Data-based (linewidth is None): estimates S_total from the Welch PSD of
-          the pilot phase, then H = clip(1 - S_eta/S_total, 0, 1).
-
-        In both modes, S_eta is taken from the shot noise quadrature PSD scaled
+        Model-based : the signal PSD is the theoretical
+        Lorentzian S_laser(f) = linewidth/(2π f²) of a laser phase random walk.
+        H(f) = S_laser / (S_laser + S_eta). 
+        
+        S_eta is taken from the shot noise quadrature PSD scaled
         by the pilot amplitude (S_Q/A²), or falls back to the HF tail of S_total.
         H is forced to 0 above bpf_cutoff_hz.
         """
         N = len(pilot_data)
         pilot_phase = np.unwrap(np.angle(pilot_data))
 
-        if self.linewidth is not None:
-            # ── Model-based Wiener ────────────────────────────────────────────
-            # Build H on the full FFT grid to avoid an interpolation step.
-            freqs = np.fft.fftshift(np.fft.fftfreq(N, d=1.0 / self.adc_rate))
+        freqs = np.fft.fftshift(np.fft.fftfreq(N, d=1.0 / self.adc_rate))
 
-            # S_laser(f) = linewidth / (2π f²), with H→1 at DC.
-            with np.errstate(divide="ignore", invalid="ignore"):
-                S_laser = np.where(
-                    freqs == 0,
-                    np.inf,
-                    self.linewidth / (2.0 * np.pi * freqs ** 2),
-                )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            S_laser = np.where(
+                freqs == 0,
+                np.inf,
+                self.linewidth / (2.0 * np.pi * freqs ** 2),
+            )
 
-            # Noise floor (shot-noise-based or HF fallback).
-            # For the fallback we still need S_total on a Welch grid.
-            if shot_noise_data is None:
-                freqs_w, S_total = welch(
-                    pilot_phase, fs=self.adc_rate,
-                    nperseg=self.nperseg, return_onesided=False,
-                )
-                freqs_w = np.fft.fftshift(freqs_w)
-                S_total = np.fft.fftshift(S_total)
-            else:
-                freqs_w = S_total = None
-
-            S_eta = self._compute_noise_floor(pilot_data, shot_noise_data, freqs, S_total)
-
-            # H(f) = S_laser / (S_laser + S_eta)
-            H = S_laser / (S_laser + np.maximum(S_eta, 0))
-            H = np.clip(np.where(np.isfinite(H), H, 1.0), 0.0, 1.0)
-            H[np.abs(freqs) > self.bpf_cutoff_hz] = 0.0
-
-            H_full = np.fft.ifftshift(H)
-
-        else:
-            # ── Data-based Wiener ─────────────────────────────────────────────
+        # Noise floor (shot-noise-based or HF fallback).
+        if shot_noise_data is None:
             freqs_w, S_total = welch(
-                pilot_phase,
-                fs=self.adc_rate,
-                nperseg=self.nperseg,
-                return_onesided=False,
+                pilot_phase, fs=self.adc_rate,
+                nperseg=self.nperseg, return_onesided=False,
             )
             freqs_w = np.fft.fftshift(freqs_w)
             S_total = np.fft.fftshift(S_total)
+        else:
+            freqs_w = S_total = None
 
-            S_eta_est = self._compute_noise_floor(pilot_data, shot_noise_data, freqs_w, S_total)
+        S_eta = self._compute_noise_floor(pilot_data, shot_noise_data, freqs, S_total)
 
-            H_welch = np.clip(1.0 - S_eta_est / np.maximum(S_total, S_eta_est), 0.0, 1.0)
-            H_welch[np.abs(freqs_w) > self.bpf_cutoff_hz] = 0.0
+        H = S_laser / (S_laser + np.maximum(S_eta, 0))
+        H = np.clip(np.where(np.isfinite(H), H, 1.0), 0.0, 1.0)
+        H[np.abs(freqs) > self.bpf_cutoff_hz] = 0.0
 
-            freqs_full = np.fft.fftshift(np.fft.fftfreq(N, d=1.0 / self.adc_rate))
-            H_full = np.fft.ifftshift(np.interp(freqs_full, freqs_w, H_welch))
+        H_full = np.fft.ifftshift(H)
 
         PILOT_F = np.fft.fft(pilot_phase)
         phi_est = np.fft.ifft(H_full * PILOT_F).real
         return phi_est
+    
+
+class SavGolPhaseEstimator(PhaseEstimator):
+    """
+    Phase estimator similar to ClassicalPhaseEstimator, but using Savitzky-Golay filters.
+
+    Logic:
+    - unwrap the pilot phase
+    - if pilot_phase_filtering_size > 1: smooth the unwrapped phase
+    - if pilot_frequency_filtering_size > 1: smooth the discrete phase derivative
+      and reconstruct the phase by cumulative summation
+
+    Notes:
+    - pilot_data is assumed to already be in baseband
+    - phase and frequency smoothing can use different polynomial orders
+    """
+
+    def __init__(
+        self,
+        adc_rate: float,
+        pilot_phase_filtering_size: int = 0,
+        pilot_frequency_filtering_size: int = 0,
+        savgol_phase_polyorder: int = 2,
+        savgol_frequency_polyorder: int = 2,
+        savgol_mode: str = "mirror",
+        savgol_use_fft: bool = True,
+        **kwargs,
+    ):
+        self.adc_rate = adc_rate
+        self.pilot_phase_filtering_size = int(pilot_phase_filtering_size)
+        self.pilot_frequency_filtering_size = int(pilot_frequency_filtering_size)
+        self.savgol_phase_polyorder = int(savgol_phase_polyorder)
+        self.savgol_frequency_polyorder = int(savgol_frequency_polyorder)
+        self.savgol_mode = savgol_mode
+        self.savgol_use_fft = bool(savgol_use_fft)
+
+    def _apply_savgol(
+        self,
+        x: np.ndarray,
+        window_length: int,
+        polyorder: int,
+    ) -> np.ndarray:
+        """
+        Apply Savitzky-Golay smoothing to a real 1D array using either:
+        - scipy.signal.savgol_filter
+        - FFT-based overlap-add convolution
+        """
+        x = np.asarray(x, dtype=np.float64)
+
+        w = _prepare_savgol_window(
+            window_length=window_length,
+            polyorder=polyorder,
+            n=x.size,
+        )
+
+        if w == 0:
+            return x
+
+        if self.savgol_mode == "interp" or not self.savgol_use_fft:
+            return np.asarray(
+                savgol_filter(
+                    x,
+                    window_length=w,
+                    polyorder=polyorder,
+                    mode=self.savgol_mode,
+                ),
+                dtype=np.float64,
+            )
+
+        return _fast_savgol_filter_fft(
+            x,
+            window_length=w,
+            polyorder=polyorder,
+            mode=self.savgol_mode,
+        )
+
+    def estimate_phase(
+        self,
+        pilot_data: np.ndarray,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Estimate the phase of a pilot tone already shifted to baseband.
+        """
+        pilot_data = np.asarray(pilot_data)
+
+        if pilot_data.size == 0:
+            return np.array([], dtype=np.float64)
+
+        pilot_angle = np.unwrap(np.angle(pilot_data).astype(np.float64))
+
+        # Smooth the unwrapped phase directly
+        if self.pilot_phase_filtering_size > 1:
+            pilot_angle = self._apply_savgol(
+                pilot_angle,
+                self.pilot_phase_filtering_size,
+                self.savgol_phase_polyorder,
+            )
+
+        # Smooth the discrete phase derivative and reconstruct the phase
+        if self.pilot_frequency_filtering_size > 1:
+            dphi = np.diff(pilot_angle, append=pilot_angle[-1])
+            dphi = self._apply_savgol(
+                dphi,
+                self.pilot_frequency_filtering_size,
+                self.savgol_frequency_polyorder,
+            )
+            pilot_angle = np.cumsum(dphi)
+
+        return np.asarray(pilot_angle, dtype=np.float64)
+    
+
+def _prepare_savgol_window(window_length: int, polyorder: int, n: int) -> int:
+    """
+    Make a Savitzky-Golay window valid:
+    - integer
+    - odd
+    - <= n
+    - > polyorder
+    """
+    if n <= 0:
+        return 0
+
+    w = int(window_length)
+
+    if w < 1:
+        return 0
+
+    w = min(w, n)
+
+    if w % 2 == 0:
+        w -= 1
+
+    min_valid = polyorder + 2
+    if min_valid % 2 == 0:
+        min_valid += 1
+
+    if w < min_valid:
+        w = min_valid
+
+    if w > n:
+        w = n if n % 2 == 1 else n - 1
+
+    if w <= polyorder or w < 3:
+        return 0
+
+    return w
+
+
+@lru_cache(maxsize=128)
+def _cached_savgol_kernel(window_length: int, polyorder: int) -> np.ndarray:
+    """
+    Cached Savitzky-Golay FIR coefficients.
+    """
+    return np.asarray(
+        savgol_coeffs(
+            window_length=window_length,
+            polyorder=polyorder,
+            deriv=0,
+            delta=1.0,
+            use="conv",
+        ),
+        dtype=np.float64,
+    )
+
+
+def _map_savgol_mode_to_pad(mode: str) -> str:
+    """
+    Map savgol_filter modes to equivalent np.pad modes.
+    """
+    mode = mode.lower()
+
+    mapping = {
+        "mirror": "reflect",
+        "nearest": "edge",
+        "wrap": "wrap",
+        "constant": "constant",
+    }
+
+    if mode not in mapping:
+        raise ValueError(
+            f"Mode '{mode}' is not supported in the FFT-based implementation. "
+            "Use 'mirror', 'nearest', 'wrap', 'constant', or 'interp'."
+        )
+
+    return mapping[mode]
+
+
+def _fast_savgol_filter_fft(
+    x: np.ndarray,
+    window_length: int,
+    polyorder: int,
+    mode: str = "mirror",
+) -> np.ndarray:
+    """
+    Fast Savitzky-Golay smoothing using:
+    - precomputed SavGol FIR coefficients
+    - padding
+    - overlap-add convolution
+    """
+    x = np.asarray(x, dtype=np.float64)
+    n = x.size
+
+    if n == 0:
+        return x.copy()
+
+    pad_mode = _map_savgol_mode_to_pad(mode)
+    kernel = _cached_savgol_kernel(window_length, polyorder)
+    half = window_length // 2
+
+    x_pad = np.pad(x, (half, half), mode=pad_mode)
+    y_pad = oaconvolve(x_pad, kernel, mode="same")
+    y = y_pad[half:half + n]
+
+    return y
+
