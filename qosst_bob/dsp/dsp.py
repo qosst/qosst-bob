@@ -204,7 +204,7 @@ def dsp_bob_params(
     shared_clock: bool = False,
     shared_lo: bool = False,
     phase_estimator_cls: Type[PhaseEstimator] = ClassicalPhaseEstimator,
-    timing_estimator_cls: Type[TimingRecoveryEstimator] = BestSamplingPointTimingRecovery,
+    timing_recovery_estimator: Type[TimingRecoveryEstimator] = BestSamplingPointTimingRecovery,
     pulsed_sampling: bool = False,
     direct_pilot_tracking: bool = False,
     process_subframes: bool = False,
@@ -358,7 +358,7 @@ def dsp_bob_params(
             mls_nbits,
             synchro_rate,
             phase_estimator_cls=phase_estimator_cls,
-            timing_estimator_cls=timing_estimator_cls,
+            timing_recovery_estimator=timing_recovery_estimator,
             pulsed_sampling=pulsed_sampling,
             switching_time=switching_time,
             linewidth=linewidth,
@@ -1376,7 +1376,7 @@ def _dsp_bob_direct_pilot_tracking(
     mls_nbits: int,
     synchro_rate: float,
     phase_estimator_cls: Type[PhaseEstimator],
-    timing_estimator_cls: Type[TimingRecoveryEstimator],
+    timing_recovery_estimator: Type[TimingRecoveryEstimator],
     pulsed_sampling: bool = False,
     switching_time: float = 0.02,
     linewidth: float = 100,
@@ -1619,8 +1619,8 @@ def _dsp_bob_direct_pilot_tracking(
     logger.info("Cancelling phase noise")
     useful_data = useful_data.astype(np.complex64) * clean_pilot
 
-    logger.info("Sampling symbols with estimator {}".format(timing_estimator_cls.__name__))
-    timing_estimator = timing_estimator_cls(
+    logger.info("Sampling symbols with estimator {}".format(timing_recovery_estimator.__name__))
+    timing_estimator = timing_recovery_estimator(
         sps = sps, 
         adc_rate = equi_adc_rate,
         num_symbols = num_symbols,
