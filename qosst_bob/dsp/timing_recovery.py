@@ -308,7 +308,7 @@ class LeastSquaresTimingRecovery(TimingRecoveryEstimator):
         bootstrap_block_symbols: int = 5000,
         fit_method: str = "polyfit",
         max_relative_sps_deviation: float = 2e-3,
-        pulse_sampling: bool = False,
+        pulsed_sampling: bool = False,
         **kwargs,
     ):
         self.sps = sps
