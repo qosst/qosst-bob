@@ -1592,12 +1592,8 @@ def _dsp_bob_direct_pilot_tracking(
     # Correct the phase noise on the whole frame before starting to extract symbols, 
     # to avoid the boundary effects of the filters on the subframes.
     logger.info("Recovering first pilot tone")
-    pilot_data = oaconvolve(useful_data, pilot_bp_filter, mode="same") * np.exp(
-        -1j * 2 * np.pi * np.arange(len(useful_data)) * f_pilot_real_1 / equi_adc_rate
-    )
-    shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same") * np.exp(
-        -1j * 2 * np.pi * np.arange(len(electronic_shot_noise_data)) * f_pilot_real_1 / equi_adc_rate
-    )
+    pilot_data = oaconvolve(useful_data, pilot_bp_filter, mode="same")
+    shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same")
 
     if dsp_debug:
         dsp_debug.tones.append(pilot_data)
@@ -1613,7 +1609,7 @@ def _dsp_bob_direct_pilot_tracking(
         pilot_data=pilot_data, 
         shot_noise_data=shot_noise_data
     )
-    phase_noise = phase_noise + 2 * np.pi * f_pilot_real_1 * np.arange(len(phase_noise)) / equi_adc_rate
+    
     clean_pilot = np.exp(-1j * phase_noise).astype(np.complex64)
 
     logger.info("Cancelling phase noise")
@@ -1809,7 +1805,7 @@ def _special_dsp_params(
 
     if pulsed_sampling:
         #Segment into symbols by averaging over sps samples, and compute variance for each symbol
-        num_symbols = int(1000000)
+        num_symbols = int(500000)
         elec_noise_filtered = pulse_sampling(
             elec_noise_filtered,
             sps=sps,

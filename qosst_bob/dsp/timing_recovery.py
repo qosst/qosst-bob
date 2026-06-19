@@ -32,7 +32,7 @@ class BestSamplingPointTimingRecovery(TimingRecoveryEstimator):
             f_pilot_1: float,
             frequency_shift: float,
             num_samples_previous_subframe: int,
-            pulse_sampling: bool = False,
+            pulsed_sampling: bool = False,
             **kwargs,
             ):
         self.sps = sps
@@ -45,7 +45,7 @@ class BestSamplingPointTimingRecovery(TimingRecoveryEstimator):
         self.f_pilot_1 = f_pilot_1
         self.frequency_shift = frequency_shift
         self.num_samples_previous_subframe = num_samples_previous_subframe
-        self.pulse_sampling = pulse_sampling
+        self.pulsed_sampling = pulsed_sampling
 
     def sample(self, data, **kwargs):
         rrc_filter, shift_up = pre_compute_filters(
@@ -88,7 +88,7 @@ class BestSamplingPointTimingRecovery(TimingRecoveryEstimator):
                     self.subframe_length)
             ).astype(int)
 
-            if self.pulse_sampling:
+            if self.pulsed_sampling:
                 subframe_data = pulse_sampling(
                     subframe_data,
                     self.sps * self.symbol_timing_oversampling,
@@ -122,7 +122,7 @@ class StaticTimingRecovery(TimingRecoveryEstimator):
             frequency_shift: float,
             offset: float = 10, 
             initial_sampling_point: float = 13,
-            pulse_sampling: bool = False,
+            pulsed_sampling: bool = False,
             **kwargs,
         ):
         self.sps = sps
@@ -136,7 +136,7 @@ class StaticTimingRecovery(TimingRecoveryEstimator):
         self.frequency_shift = frequency_shift
         self.offset = offset
         self.initial_sampling_point = initial_sampling_point
-        self.pulse_sampling = pulse_sampling
+        self.pulsed_sampling = pulsed_sampling
     
     def sample(self, data, **kwargs):
         result = []
@@ -166,7 +166,7 @@ class StaticTimingRecovery(TimingRecoveryEstimator):
         ).astype(int)
 
 
-        if self.pulse_sampling:
+        if self.pulsed_sampling:
             data = pulse_sampling(
                 data,
                 self.sps * self.symbol_timing_oversampling,
@@ -199,7 +199,7 @@ class KalmanTimingRecovery(TimingRecoveryEstimator):
             block_size: int = 10000,
             processed_variance: float = 1e-10,
             initial_variance: float = 0.1,
-            pulse_sampling: bool = False,
+            pulsed_sampling: bool = False,
             **kwargs,
         ):
         self.sps = sps
@@ -214,7 +214,7 @@ class KalmanTimingRecovery(TimingRecoveryEstimator):
         self.block_size = block_size
         self.processed_variance = processed_variance
         self.initial_variance = initial_variance
-        self.pulse_sampling = pulse_sampling
+        self.pulsed_sampling = pulsed_sampling
 
     def sample(
         self,
@@ -265,7 +265,7 @@ class KalmanTimingRecovery(TimingRecoveryEstimator):
         result = []
         for i in range(0, self.num_symbols // self.subframe_length):
             subgrid = best_grid[i*self.subframe_length:(i+1)*self.subframe_length]
-            if self.pulse_sampling:
+            if self.pulsed_sampling:
                 subframe = data[subgrid[0] - self.sps * self.symbol_timing_oversampling / 2 - 0.5 : subgrid[-1] + self.sps * self.symbol_timing_oversampling / 2 + 0.5]
                 subframe = pulse_sampling(
                     subframe,
@@ -325,12 +325,12 @@ class LeastSquaresTimingRecovery(TimingRecoveryEstimator):
         self.bootstrap_block_symbols = bootstrap_block_symbols
         self.fit_method = fit_method
         self.max_relative_sps_deviation = max_relative_sps_deviation
-        self.pulse_sampling = pulse_sampling
+        self.pulsed_sampling = pulsed_sampling
 
     def sample(self, data: np.ndarray, **kwargs):
-        if self.pulse_sampling:
+        if self.pulsed_sampling:
             logger.warning(
-                "LeastSquaresTimingRecovery ignores pulse_sampling and uses "
+                "LeastSquaresTimingRecovery ignores pulsed_sampling and uses "
                 "fractional point sampling on the fitted grid."
             )
 
