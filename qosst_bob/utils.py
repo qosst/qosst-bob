@@ -17,6 +17,7 @@
 """
 Util functions for qosst-bob.
 """
+
 from typing import Union, Tuple, Optional
 
 import numpy as np

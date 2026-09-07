@@ -18,6 +18,7 @@
 """
 A graphical user interface for Bob.
 """
+
 import logging
 import argparse
 from typing import Union, List, Tuple, Optional

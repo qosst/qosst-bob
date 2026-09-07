@@ -17,6 +17,7 @@
 """
 Entrypoint for the optimization script
 """
+
 import os
 from pathlib import Path
 import argparse

@@ -17,6 +17,7 @@
 """
 Enumerations of content in the GUI, and definition of some constants.
 """
+
 import os
 from pathlib import Path
 from enum import Enum

@@ -3,55 +3,56 @@ import numpy as np
 from numba import njit
 from scipy.ndimage import uniform_filter1d
 
+
 class ClassicalPhaseEstimator:
-    def __init__(
-            self,
-            pilot_phase_filtering_size=1, 
-            pilot_frequency_filtering_size=1
-            ):
+    def __init__(self, pilot_phase_filtering_size=1, pilot_frequency_filtering_size=1):
         self.pilot_phase_filtering_size = pilot_phase_filtering_size
         self.pilot_frequency_filtering_size = pilot_frequency_filtering_size
 
     def estimate_phase(
-            self, 
-            pilot_data: np.ndarray,
-            ) -> np.ndarray:
+        self,
+        pilot_data: np.ndarray,
+    ) -> np.ndarray:
         """
         Estimate the phase of the signal using the pilot tone.
         """
         pilot_angle = np.angle(pilot_data)
 
-        if self.pilot_phase_filtering_size > 1 or self.pilot_frequency_filtering_size > 1:
+        if (
+            self.pilot_phase_filtering_size > 1
+            or self.pilot_frequency_filtering_size > 1
+        ):
             print("Filtering pilot")
             # The unwrapped angle can grow into a large number, but the full
             # precision is needed. Convert to double.
-            pilot_angle = np.unwrap(pilot_angle.astype('d'))
+            pilot_angle = np.unwrap(pilot_angle.astype("d"))
             if self.pilot_phase_filtering_size > 1:
                 pilot_angle = uniform_filter1d(
-                    pilot_angle,
-                    self.pilot_phase_filtering_size
+                    pilot_angle, self.pilot_phase_filtering_size
                 )
 
             if self.pilot_frequency_filtering_size > 1:
-                pilot_angle = np.cumsum(uniform_filter1d(
-                    np.diff(pilot_angle, append=pilot_angle[-1]),
-                    self.pilot_frequency_filtering_size)
+                pilot_angle = np.cumsum(
+                    uniform_filter1d(
+                        np.diff(pilot_angle, append=pilot_angle[-1]),
+                        self.pilot_frequency_filtering_size,
+                    )
                 )
         return pilot_angle
-    
+
 
 class UKFPhaseEstimator:
     def __init__(
-            self,
-            adc_rate: float,
-            linewidth: float, 
-            alpha: float =1e-3, 
-            beta: float =2.0, 
-            kappa: float =0.0,
-        ):
+        self,
+        adc_rate: float,
+        linewidth: float,
+        alpha: float = 1e-3,
+        beta: float = 2.0,
+        kappa: float = 0.0,
+    ):
         self.linewidth = linewidth
         self.adc_rate = adc_rate
-        self.Q = 2 * np.pi * self.linewidth * (1/self.adc_rate)
+        self.Q = 2 * np.pi * self.linewidth * (1 / self.adc_rate)
         self.R = None
         self.alpha = alpha
         self.beta = beta
@@ -59,9 +60,9 @@ class UKFPhaseEstimator:
 
     def estimate_phase(
         self,
-        pilot_data: np.ndarray, 
+        pilot_data: np.ndarray,
         shot_noise_data: np.ndarray,
-        ) -> np.ndarray:
+    ) -> np.ndarray:
         """
         Estimate the phase of the signal using the pilot tone and the UKF.
 
@@ -73,12 +74,13 @@ class UKFPhaseEstimator:
         Returns:
             - estimated_phase: array of estimated phase values
         """
-        self.R = np.array([[np.var(shot_noise_data.real), 0],
-                    [0, np.var(shot_noise_data.imag)]])
+        self.R = np.array(
+            [[np.var(shot_noise_data.real), 0], [0, np.var(shot_noise_data.imag)]]
+        )
         phase_diff = np.angle(pilot_data[1:] * np.conj(pilot_data[:-1]))
         delta_omega_est = np.mean(phase_diff)
 
-        k = np.arange(len(pilot_data)) 
+        k = np.arange(len(pilot_data))
         pilot_baseband = pilot_data * np.exp(-1j * delta_omega_est * k)
 
         estimated_phase = run_phase_ukf(
@@ -86,7 +88,7 @@ class UKFPhaseEstimator:
             pilot_baseband.imag,
             self.Q,
             self.R,
-            A = np.mean(np.abs(pilot_data)),
+            A=np.mean(np.abs(pilot_data)),
             alpha=self.alpha,
             beta=self.beta,
             kappa=self.kappa,
@@ -95,17 +97,18 @@ class UKFPhaseEstimator:
 
         return estimated_phase
 
+
 @njit
 def run_phase_ukf(
-        z_real: np.ndarray, 
-        z_imag: np.ndarray,
-        Q: float,
-        R: np.ndarray,
-        A: float=1.0,
-        alpha: float=1e-3,
-        beta: float=2.0,
-        kappa: float=0.0
-    ) -> np.ndarray:
+    z_real: np.ndarray,
+    z_imag: np.ndarray,
+    Q: float,
+    R: np.ndarray,
+    A: float = 1.0,
+    alpha: float = 1e-3,
+    beta: float = 2.0,
+    kappa: float = 0.0,
+) -> np.ndarray:
     """
     Run a UKF to estimate the phase of a signal given noisy measurements of its cosine and sine projections.
 
@@ -115,11 +118,13 @@ def run_phase_ukf(
         - Q: process noise covariance
         - R: measurement noise covariance matrix (2x2)
         - A: amplitude of the signal
-        - alpha, beta, kappa: UKF scaling parameters    
+        - alpha, beta, kappa: UKF scaling parameters
     Returns:
         - phase_est: array of estimated phase values
     """
-    assert z_real.shape == z_imag.shape, "Real and imaginary measurement arrays must have the same shape"
+    assert (
+        z_real.shape == z_imag.shape
+    ), "Real and imaginary measurement arrays must have the same shape"
     assert R.shape == (2, 2), "Measurement noise covariance R must be a 2x2 matrix"
     assert Q > 0, "Process noise covariance Q must be positive"
 
@@ -137,7 +142,7 @@ def run_phase_ukf(
     # Weights for mean and covariance
     Wm0 = lambda_ / (1.0 + lambda_)
     Wc0 = Wm0 + (1.0 - alpha**2 + beta)
-    Wi  = 1.0 / (2.0 * (1.0 + lambda_))
+    Wi = 1.0 / (2.0 * (1.0 + lambda_))
 
     # Initial state estimate (phase) and covariance
     x = np.angle(z_real[0] + 1j * z_imag[0])  # initial phase estimate
@@ -165,8 +170,8 @@ def run_phase_ukf(
         s2 = A * np.sin(x2)
 
         # Weighted mean of predicted measurements
-        z_pred0 = Wm0*c0 + Wi*c1 + Wi*c2  # mean of cosines
-        z_pred1 = Wm0*s0 + Wi*s1 + Wi*s2  # mean of sines
+        z_pred0 = Wm0 * c0 + Wi * c1 + Wi * c2  # mean of cosines
+        z_pred1 = Wm0 * s0 + Wi * s1 + Wi * s2  # mean of sines
 
         # Start with measurement noise covariance
         S00 = R00
@@ -216,15 +221,15 @@ def run_phase_ukf(
 
         # Kalman gain calculation (for 2D measurement)
         # Invert 2x2 innovation covariance matrix
-        detS = S00*S11 - S01*S01
+        detS = S00 * S11 - S01 * S01
 
-        invS00 =  S11 / detS
+        invS00 = S11 / detS
         invS01 = -S01 / detS
-        invS11 =  S00 / detS
+        invS11 = S00 / detS
 
         # Kalman gain for each measurement dimension
-        K0 = Pxz0*invS00 + Pxz1*invS01
-        K1 = Pxz0*invS01 + Pxz1*invS11
+        K0 = Pxz0 * invS00 + Pxz1 * invS01
+        K1 = Pxz0 * invS01 + Pxz1 * invS11
 
         # Update step
         # Innovation (difference between actual and predicted measurement)
@@ -232,9 +237,8 @@ def run_phase_ukf(
         innov1 = z_imag[k] - z_pred1
 
         # Update phase estimate and covariance
-        x = x + K0*innov0 + K1*innov1
-        P = P - (K0*(S00*K0 + S01*K1) +
-                K1*(S01*K0 + S11*K1))
+        x = x + K0 * innov0 + K1 * innov1
+        P = P - (K0 * (S00 * K0 + S01 * K1) + K1 * (S01 * K0 + S11 * K1))
 
         # Store phase estimate
         phase_est[k] = x

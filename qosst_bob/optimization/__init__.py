@@ -19,6 +19,7 @@ Optimization submodules of Bob.
 
 Also contains the Updater abstract class.
 """
+
 import abc
 import argparse
 from typing import Dict

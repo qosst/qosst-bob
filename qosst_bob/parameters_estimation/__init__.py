@@ -17,4 +17,5 @@
 """
 Module holding estimators for Bob.
 """
+
 from .base import BaseEstimator, DefaultEstimator

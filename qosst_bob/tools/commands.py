@@ -17,6 +17,7 @@
 """
 Commands for Bob tools submodule.
 """
+
 import logging
 import argparse
 

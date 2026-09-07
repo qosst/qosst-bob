@@ -18,6 +18,7 @@
 """
 DSP functions to deal with synchronization.
 """
+
 from typing import Tuple
 import logging
 
@@ -37,7 +38,8 @@ def synchronize(
     data: np.ndarray,
     synchro_obj: SynchronizationSequence,
     use_abs: bool = False,
-    resample: float = 1) -> Tuple[int, int]:
+    resample: float = 1,
+) -> Tuple[int, int]:
     """
     Find the beginning of a synchronization sequence in data.
 
@@ -62,10 +64,7 @@ def synchronize(
     Returns:
         Tuple[int, int]: tuple including the beginning and the end of the synchronization sequence.
     """
-    logger.debug(
-        "Trying to synchronise the %s with data.",
-        str(synchro_obj)
-    )
+    logger.debug("Trying to synchronise the %s with data.", str(synchro_obj))
     logger.debug(
         "Computing rolling average to get approximation of the synchronization location."
     )
@@ -90,12 +89,16 @@ def synchronize(
     data_synchro = data[xcorr_start_point:xcorr_end_point]
     lags = signal.correlation_lags(len(data_synchro), len(synchro), mode="same")
     if use_abs:
-        xcorr = np.abs(signal.correlate(np.abs(data_synchro), np.abs(synchro), mode="same"))
+        xcorr = np.abs(
+            signal.correlate(np.abs(data_synchro), np.abs(synchro), mode="same")
+        )
     else:
         xcorr = np.abs(signal.correlate(data_synchro, synchro, mode="same"))
 
     beginning_synchro = lags[np.argmax(xcorr)] + xcorr_start_point
     end_synchro = len(synchro) + beginning_synchro
 
-    logger.debug("Beginning was found at %i and end at %i", beginning_synchro, end_synchro)
+    logger.debug(
+        "Beginning was found at %i and end at %i", beginning_synchro, end_synchro
+    )
     return beginning_synchro, end_synchro

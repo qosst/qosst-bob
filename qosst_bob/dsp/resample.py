@@ -17,6 +17,7 @@
 """
 Modules to resample data (mostly downsample) and associated functions.
 """
+
 import numpy as np
 from scipy import signal
 

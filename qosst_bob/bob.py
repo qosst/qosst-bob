@@ -18,6 +18,7 @@
 """
 Client code for QOSST Bob.
 """
+
 import logging
 import time
 from typing import Any, Optional
@@ -347,7 +348,7 @@ class Bob:
         self.adc.set_acquisition_parameters(
             acquisition_time=self.config.bob.adc.acquisition_time,
             target_rate=self.config.bob.adc.rate,
-            **self.config.bob.adc.extra_acquisition_parameters
+            **self.config.bob.adc.extra_acquisition_parameters,
         )
 
     def _get_adc_data(self):
@@ -699,8 +700,12 @@ class Bob:
 
         logger.info("Applying DSP on elec and elec+shot noise data")
 
-        params.elec_noise_estimation_ratio = self.config.bob.dsp.elec_noise_estimation_ratio
-        params.elec_shot_noise_estimation_ratio = self.config.bob.dsp.elec_shot_noise_estimation_ratio
+        params.elec_noise_estimation_ratio = (
+            self.config.bob.dsp.elec_noise_estimation_ratio
+        )
+        params.elec_shot_noise_estimation_ratio = (
+            self.config.bob.dsp.elec_shot_noise_estimation_ratio
+        )
         self.electronic_symbols, self.electronic_shot_symbols = special_dsp(
             self.electronic_noise.data, self.electronic_shot_noise.data, params
         )

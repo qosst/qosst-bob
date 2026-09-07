@@ -22,6 +22,7 @@ Main module for the DSP algorithm.
 Warning: the DSP _dsp_bob_shared_clock_shared_lo, _dsp_bob_shared_clock_unshared_lo and _dsp_bob_unshared_clock_shared_lo
 are adapated versions of old DSP and might not work. They are untested.
 """
+
 # pylint: disable=too-many-lines
 import logging
 from typing import Tuple, List, Optional, Type
@@ -57,7 +58,7 @@ from .resample import (
     downsample,
     _best_sampling_point_float,
     best_sampling_point,
-    upsample
+    upsample,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,15 +116,20 @@ class SpecialDSPParams:
     roll_off: float  #: Roll off of the RRC filter.
     frequency_shift: float  #: Frequency shift of the data, recovered in case clock is not shared and/or LLO setup.
     schema: DetectionSchema  #: Detection schema to know how to interpret the data.
-    elec_noise_estimation_ratio: Optional[float] = 1.0  #: Ratio of electronic noise samples to analyze
-    elec_shot_noise_estimation_ratio: Optional[float] = 1.0  #: Ratio of electronic and shot noise samples to analyze
+    elec_noise_estimation_ratio: Optional[float] = (
+        1.0  #: Ratio of electronic noise samples to analyze
+    )
+    elec_shot_noise_estimation_ratio: Optional[float] = (
+        1.0  #: Ratio of electronic and shot noise samples to analyze
+    )
 
     def __str__(self) -> str:
         return f"Symbol rate = {self.symbol_rate*1e-6} MBaud, ADC Rate = {self.adc_rate*1e-9} GSamples/s, Roll Off = {self.roll_off}, Frequency shift = {self.frequency_shift*1e-6} MHz, Detection schema = {str(self.schema)}, Ratio of electronic noise samples kept = {self.elec_noise_estimation_ratio}, Ratio of electronic and shot noise samples kept = {self.elec_shot_noise_estimation_ratio}"
 
 
 def dsp_bob(
-    data: np.ndarray, config: Configuration,
+    data: np.ndarray,
+    config: Configuration,
 ) -> Tuple[Optional[List[np.ndarray]], Optional[SpecialDSPParams], Optional[DSPDebug]]:
     """
     DSP function for Bob, given the data and the configuration.
@@ -200,7 +206,9 @@ def dsp_bob_params(
     shared_clock: bool = False,
     shared_lo: bool = False,
     phase_estimator_cls: Type[PhaseEstimator] = ClassicalPhaseEstimator,
-    timing_recovery_estimator_cls: Type[TimingRecoveryEstimator] = BestSamplingPointTimingRecovery,
+    timing_recovery_estimator_cls: Type[
+        TimingRecoveryEstimator
+    ] = BestSamplingPointTimingRecovery,
     direct_pilot_tracking: bool = False,
     process_subframes: bool = False,
     subframe_length: int = 0,
@@ -367,7 +375,8 @@ def dsp_bob_params(
             symbol_timing_oversampling=symbol_timing_oversampling,
             num_samples_pilot_search=num_samples_pilot_search,
             schema=schema,
-            debug=debug)
+            debug=debug,
+        )
     return _dsp_bob_general(
         data,
         symbol_rate,
@@ -551,9 +560,7 @@ def _dsp_bob_shared_clock_shared_lo(
             adc_rate,
         )
 
-        subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
-        )
+        subframe_data = 1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
 
         max_t = _best_sampling_point_int(subframe_data, sps)
 
@@ -769,9 +776,7 @@ def _dsp_bob_shared_clock_unshared_lo(
             adc_rate,
         )
 
-        subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
-        )
+        subframe_data = 1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
 
         max_t = best_sampling_point(subframe_data, sps)
 
@@ -985,9 +990,7 @@ def _dsp_bob_unshared_clock_shared_lo(
             equi_adc_rate,
         )
 
-        subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
-        )
+        subframe_data = 1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
 
         max_t = _best_sampling_point_float(subframe_data, sps)
 
@@ -1150,7 +1153,7 @@ def _dsp_bob_general(
     # The pilot frequencies are estimated on a large sample
     # (typically 10M points) taken after the ZC sequence.
     pilot_start_point = approx_synchro + 2 * zc_length * sps_approx
-    data_pilots = data[pilot_start_point:pilot_start_point+num_samples_pilot_search]
+    data_pilots = data[pilot_start_point : pilot_start_point + num_samples_pilot_search]
     f_pilot_real_1, f_pilot_real_2 = find_two_pilots(data_pilots, adc_rate, excl=excl)
     logger.info(
         "Pilots found at %f MHz and %f MHz",
@@ -1216,7 +1219,12 @@ def _dsp_bob_general(
     # let's reestimate f_beat more properly.
     len_synchro = np.ceil(synchro_obj.length * equi_adc_rate / dac_rate).astype(int)
     f_pilot_real_1, f_pilot_real_2 = find_two_pilots(
-        data[end_synchro + len_synchro : end_synchro + len_synchro + num_samples_fbeat_estimation],
+        data[
+            end_synchro
+            + len_synchro : end_synchro
+            + len_synchro
+            + num_samples_fbeat_estimation
+        ],
         equi_adc_rate,
         excl=excl,
     )
@@ -1296,9 +1304,7 @@ def _dsp_bob_general(
             equi_adc_rate,
         )
 
-        subframe_data = (
-            1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
-        )
+        subframe_data = 1 / np.sqrt(sps) * oaconvolve(subframe_data, filtre[1:], "same")
 
         max_t = _best_sampling_point_float(subframe_data, sps)
         if max_t0 == -1:
@@ -1448,9 +1454,7 @@ def _dsp_bob_direct_pilot_tracking(
 
     # Separate shot noise if switching time is given
     if switching_time:
-        end_electronic_shot_noise = int(
-            switching_time * adc_rate
-        )
+        end_electronic_shot_noise = int(switching_time * adc_rate)
         electronic_shot_noise_data = data[:end_electronic_shot_noise]
         data = data[end_electronic_shot_noise:]
 
@@ -1469,7 +1473,7 @@ def _dsp_bob_direct_pilot_tracking(
     f_pilot_1 = pilots_frequencies[0]
 
     # Convert the data to float32
-    data = data.astype('f')
+    data = data.astype("f")
 
     # Create the synchronization sequence object
     synchro_obj = synchro_cls(
@@ -1487,22 +1491,26 @@ def _dsp_bob_direct_pilot_tracking(
     logger.info("Computing envelope for approximate synchronization sequence search")
     envelope = np.abs(data[::synchro_oversampling])
     envelope = uniform_filter1d(envelope, synchro_obj.length)
-    preamble_synchro_start = (np.argmax(envelope) - synchro_obj.length // 2) * synchro_oversampling
+    preamble_synchro_start = (
+        np.argmax(envelope) - synchro_obj.length // 2
+    ) * synchro_oversampling
 
     # The pilot frequencies are estimated on a large sample
     # (typically 10M points) taken after the synchronization sequence.
     pilot_start_point = preamble_synchro_start + 2 * zc_length * synchro_oversampling
-    data_pilots = data[pilot_start_point:pilot_start_point+num_samples_pilot_search]
+    data_pilots = data[pilot_start_point : pilot_start_point + num_samples_pilot_search]
 
     if num_pilots == 2:
         f_pilot_2 = pilots_frequencies[1]
         logger.info("Searching for pilots")
-        f_pilot_real_1, f_pilot_real_2 = find_two_pilots(data_pilots, adc_rate, excl=excl)
+        f_pilot_real_1, f_pilot_real_2 = find_two_pilots(
+            data_pilots, adc_rate, excl=excl
+        )
         logger.info(
             "Pilots found at %f MHz and %f MHz",
             f_pilot_real_1 * 1e-6,
             f_pilot_real_2 * 1e-6,
-            )
+        )
 
         # Measure the clock difference
         delta_f = (f_pilot_real_2 - f_pilot_real_1) / (f_pilot_2 - f_pilot_1)
@@ -1548,14 +1556,20 @@ def _dsp_bob_direct_pilot_tracking(
     if dsp_debug:
         dsp_debug.beat_frequency = f_beat
 
-    logger.info('Searching for start of the synchronization sequence')
-    synchro_search_start = max(preamble_synchro_start - 4 * synchro_obj.length * synchro_oversampling, 0)
-    synchro_search_end = synchro_search_start + 8 * synchro_obj.length * synchro_oversampling
+    logger.info("Searching for start of the synchronization sequence")
+    synchro_search_start = max(
+        preamble_synchro_start - 4 * synchro_obj.length * synchro_oversampling, 0
+    )
+    synchro_search_end = (
+        synchro_search_start + 8 * synchro_obj.length * synchro_oversampling
+    )
     data_synchro = data[synchro_search_start:synchro_search_end]
-    shift = np.exp(-1j * 2 * np.pi * np.arange(len(data_synchro)) * f_beat / equi_adc_rate)
+    shift = np.exp(
+        -1j * 2 * np.pi * np.arange(len(data_synchro)) * f_beat / equi_adc_rate
+    )
     begin_synchro, end_synchro = synchronize(
-        data_synchro * shift, synchro_obj,
-        resample=equi_adc_rate / synchro_rate)
+        data_synchro * shift, synchro_obj, resample=equi_adc_rate / synchro_rate
+    )
     begin_synchro += synchro_search_start
     end_synchro += synchro_search_start
 
@@ -1603,19 +1617,25 @@ def _dsp_bob_direct_pilot_tracking(
     ).astype(np.complex64)
 
     # Pre-compute the filter extracting the pilot tone.
-    pilot_bp_filter = (firwin(fir_size, tone_filtering_cutoff / equi_adc_rate) * np.exp(
-        1j * 2 * np.pi * np.arange(fir_size) * f_pilot_real_1 / equi_adc_rate
-    )).astype(np.complex64)
+    pilot_bp_filter = (
+        firwin(fir_size, tone_filtering_cutoff / equi_adc_rate)
+        * np.exp(1j * 2 * np.pi * np.arange(fir_size) * f_pilot_real_1 / equi_adc_rate)
+    ).astype(np.complex64)
 
-    # Correct the phase noise on the whole frame before starting to extract symbols, 
+    # Correct the phase noise on the whole frame before starting to extract symbols,
     # to avoid the boundary effects of the filters on the subframes.
     logger.info("Recovering first pilot tone")
     pilot_data = oaconvolve(useful_data, pilot_bp_filter, mode="same")
-    shot_noise_data = oaconvolve(electronic_shot_noise_data, pilot_bp_filter, mode="same")
-    
+    shot_noise_data = oaconvolve(
+        electronic_shot_noise_data, pilot_bp_filter, mode="same"
+    )
+
     logger.info("Correcting phase noise on the whole frame")
     if phase_estimator_cls == ClassicalPhaseEstimator:
-        phase_estimator = phase_estimator_cls(pilot_phase_filtering_size=pilot_phase_filtering_size, pilot_frequency_filtering_size=pilot_frequency_filtering_size)
+        phase_estimator = phase_estimator_cls(
+            pilot_phase_filtering_size=pilot_phase_filtering_size,
+            pilot_frequency_filtering_size=pilot_frequency_filtering_size,
+        )
         phase_noise = phase_estimator.estimate_phase(pilot_data)
     else:
         phase_estimator = phase_estimator_cls(linewidth, equi_adc_rate)
@@ -1626,23 +1646,25 @@ def _dsp_bob_direct_pilot_tracking(
     logger.info("Cancelling phase noise")
     useful_data = useful_data.astype(np.complex64) * clean_pilot
 
-    timing_estimator = timing_estimator_cls(sps, subframe_length, symbol_timing_oversampling)
+    timing_estimator = timing_estimator_cls(
+        sps, subframe_length, symbol_timing_oversampling
+    )
 
     while num_symbols_recovered < num_symbols:
         # Include more samples to account for the boundary condition of filters.
-        begin_extended_subframe = max(
-            begin_subframe - num_samples_previous_subframe, 0
+        begin_extended_subframe = max(begin_subframe - num_samples_previous_subframe, 0)
+        subframe_data = useful_data[begin_extended_subframe:end_subframe].astype(
+            np.complex64
         )
-        subframe_data = useful_data[begin_extended_subframe:end_subframe].astype(np.complex64)
 
         logger.info("Shifting quantum data to baseband")
-        subframe_data *= shift_up[:len(subframe_data)]
+        subframe_data *= shift_up[: len(subframe_data)]
 
         logger.info("Applying RRC filter")
         subframe_data = oaconvolve(subframe_data, rrc_filter, "same")
 
         # Ignore the extra samples at the beginning of the frame
-        subframe_data = subframe_data[begin_subframe - begin_extended_subframe:]
+        subframe_data = subframe_data[begin_subframe - begin_extended_subframe :]
 
         logger.info("Finding best decision point")
         if symbol_timing_oversampling != 1:
@@ -1659,7 +1681,7 @@ def _dsp_bob_direct_pilot_tracking(
         for i in range(subframe_subdivision):
             start = i * chunk_length
             if i != subframe_subdivision - 1:
-                result.append(subframe_data[start:start + chunk_length])
+                result.append(subframe_data[start : start + chunk_length])
             else:
                 result.append(subframe_data[start:])
         num_symbols_recovered += len(subframe_data)
@@ -1681,8 +1703,8 @@ def _dsp_bob_direct_pilot_tracking(
 
 
 def find_global_angle(
-    received_data: np.ndarray,
-    sent_data: np.ndarray) -> Tuple[float, float]:
+    received_data: np.ndarray, sent_data: np.ndarray
+) -> Tuple[float, float]:
     """
     Find the global angle between received and sent data.
 
@@ -1732,7 +1754,7 @@ def special_dsp(
         params.frequency_shift,
         params.schema,
         params.elec_noise_estimation_ratio,
-        params.elec_shot_noise_estimation_ratio
+        params.elec_shot_noise_estimation_ratio,
     )
 
 
@@ -1753,17 +1775,19 @@ def _subsample(data: np.ndarray, ratio: float, position: str) -> np.ndarray:
     """
     n = len(data)
 
-    if position in ['m', 'middle']:
+    if position in ["m", "middle"]:
         index_from = int(n / 2 * (1 - ratio))
         index_to = int(n / 2 * (1 + ratio))
-    elif position in ['h', 'head']:
+    elif position in ["h", "head"]:
         index_from = 0
         index_to = int(n * ratio)
-    elif position in ['t', 'tail']:
+    elif position in ["t", "tail"]:
         index_from = int(n * (1 - ratio))
         index_to = n
     else:
-        raise ValueError(f"position must be one of 'head', 'middle' or 'tail' (got '{ position }')")
+        raise ValueError(
+            f"position must be one of 'head', 'middle' or 'tail' (got '{ position }')"
+        )
     return data[index_from:index_to]
 
 
@@ -1776,7 +1800,7 @@ def _special_dsp_params(
     frequency_shift: float,
     _schema: DetectionSchema,
     elec_noise_estimation_ratio: float,
-    elec_shot_noise_estimation_ratio: float
+    elec_shot_noise_estimation_ratio: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Special DSP to apply on the electronic and electronic and shot noise samples
@@ -1801,11 +1825,13 @@ def _special_dsp_params(
 
     # For efficiency reasons, the DSP on this section is performed
     # on float32s/complex64s.
-    elec_noise_data = _subsample(elec_noise_data, elec_noise_estimation_ratio, 'tail')
+    elec_noise_data = _subsample(elec_noise_data, elec_noise_estimation_ratio, "tail")
     elec_noise_data = elec_noise_data.astype(np.complex64)
     n_elec_noise_data = len(elec_noise_data)
 
-    elec_shot_noise_data = _subsample(elec_shot_noise_data, elec_shot_noise_estimation_ratio, 'tail')
+    elec_shot_noise_data = _subsample(
+        elec_shot_noise_data, elec_shot_noise_estimation_ratio, "tail"
+    )
     elec_shot_noise_data = elec_shot_noise_data.astype(np.complex64)
     n_elec_shot_noise_data = len(elec_shot_noise_data)
 
@@ -1816,16 +1842,12 @@ def _special_dsp_params(
         1 / symbol_rate,
         adc_rate,
     )
-    rrc_filter = rrc_filter[1:].astype('f')
+    rrc_filter = rrc_filter[1:].astype("f")
 
     n_shift = max(n_elec_noise_data, n_elec_shot_noise_data)
     shift = np.exp(
-        -1j
-        * 2
-        * np.pi
-        * np.arange(n_shift)
-        * frequency_shift
-        / adc_rate).astype(np.complex64)
+        -1j * 2 * np.pi * np.arange(n_shift) * frequency_shift / adc_rate
+    ).astype(np.complex64)
 
     logger.info("Starting DSP on elec noise.")
     elec_noise_bb = elec_noise_data * shift[:n_elec_noise_data]
