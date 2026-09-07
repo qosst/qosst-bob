@@ -17,4 +17,5 @@
 """
 QOSST module for Bob.
 """
-__version__ = "0.10.4"
+
+__version__ = "0.10.4.dev0"
