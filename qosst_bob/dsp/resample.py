@@ -206,10 +206,9 @@ def upsample(data: np.ndarray, upsampling_factor: float, order: int) -> np.ndarr
     """
     if order == 0:
         return _upsample_zoh(data, upsampling_factor)
-    elif order == 1:
+    if order == 1:
         return _upsample_linear_interpolation(data, upsampling_factor)
-    else:
-        return signal.resample(data, int(len(data) * upsampling_factor))
+    return signal.resample(data, int(len(data) * upsampling_factor))
 
 
 def _upsample_zoh(data: np.ndarray, upsampling_factor) -> np.ndarray:
@@ -226,12 +225,12 @@ def _upsample_zoh(data: np.ndarray, upsampling_factor) -> np.ndarray:
     """
     if int(upsampling_factor) == upsampling_factor:
         return np.repeat(data, int(upsampling_factor))
-    else:
-        n = len(data)
-        source_index = np.arange(int(n * upsampling_factor)) / upsampling_factor
-        _, index_integral = np.modf(source_index)
-        index_integral = index_integral.astype(int)
-        return data[index_integral]
+
+    n = len(data)
+    source_index = np.arange(int(n * upsampling_factor)) / upsampling_factor
+    _, index_integral = np.modf(source_index)
+    index_integral = index_integral.astype(int)
+    return data[index_integral]
 
 
 def _upsample_linear_interpolation(data: np.ndarray, upsampling_factor) -> np.ndarray:

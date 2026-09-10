@@ -1,6 +1,6 @@
 [project]
 name = "qosst-bob"
-version = "0.10.4.dev0"
+version = "0.10.4.dev1"
 description = "Bob submodule of QOSST, containing modules for Bob client, the GUI, the DSP of Bob and parameters estimation."
 authors = [
     { name = "Yoann Piétri", email="Yoann.Pietri@lip6.fr" },

@@ -29,7 +29,7 @@ from copy import deepcopy
 import numpy as np
 
 from qosst_core.configuration import Configuration
-
+from qosst_core.dsp.base import BaseDSP
 from qosst_core.configuration.exceptions import InvalidConfiguration
 from qosst_core.control_protocol import QOSST_VERSION
 from qosst_core.control_protocol.codes import QOSSTCodes
@@ -45,8 +45,7 @@ from qosst_hal.polarisation_controller import (
 )
 from qosst_hal.powermeter import GenericPowerMeter
 
-from qosst_bob.dsp import dsp_bob, special_dsp
-from qosst_bob.dsp.dsp import find_global_angle
+from qosst_bob.dsp.phase_estimation import find_global_angle
 from qosst_bob.data import ElectronicNoise, ElectronicShotNoise
 
 logger = logging.getLogger(__name__)
@@ -113,6 +112,8 @@ class Bob:
     enable_laser: (
         bool  #: Enable the laser if True. Meant to be False when using the GUI.
     )
+
+    dsp_obj: BaseDSP  #: DSP chain.
 
     def __init__(self, config_path: str, enable_laser: bool = True):
         """
@@ -206,6 +207,12 @@ class Bob:
         logger.info("Schema is %s", str(detection_schema))
         detection_schema.check()
         logger.info("Detection schema accepted.")
+
+        logger.info("Using DSP class %s", self.config.bob.dsp.dsp_class)
+        self.dsp_obj = self.config.bob.dsp.dsp_class()
+
+        logger.info("Loading parameters into the DSP")
+        self.dsp_obj.configure_from_config(self.config)
 
     def open_hardware(self) -> None:
         """
@@ -315,13 +322,25 @@ class Bob:
         acquisition_time = self.config.bob.adc.acquisition_time
         if not acquisition_time:  # acquisition_time = 0
             logger.info("Automatically computing the acquisition time.")
+            synchronization_length = (
+                self.config.frame.synchronization.synchronization_cls(
+                    root=self.config.frame.synchronization.zc_root,
+                    length=self.config.frame.synchronization.zc_length,
+                    nbits=self.config.frame.synchronization.mls_nbits,
+                ).length
+            )
             num_samples = (
                 self.config.bob.dsp.alice_dac_rate
                 / self.config.frame.quantum.symbol_rate
             ) * self.config.frame.quantum.num_symbols
             acquisition_time = (
                 self.config.bob.adc.overhead_time
-                + (num_samples + self.config.frame.zadoff_chu.length)
+                + (
+                    num_samples
+                    + synchronization_length
+                    * self.config.bob.dsp.alice_dac_rate
+                    / self.config.frame.synchronization.rate
+                )
                 / self.config.bob.dsp.alice_dac_rate
             )
         if self.config.clock.sharing:
@@ -635,9 +654,12 @@ class Bob:
         logger.info("DSP start")
 
         logger.info("Applying DSP on quantum data")
-        data = self.signal_data[0]
 
-        self.quantum_symbols, params, dsp_debug = dsp_bob(data, self.config)
+        self.quantum_symbols = self.dsp_obj.dsp(
+            self.signal_data,
+            self.electronic_noise.data,
+            self.electronic_shot_noise.data,
+        )
 
         # Correct global phase of each frame of quantum symbols
         logger.info("Correcting global frame on each subframe")
@@ -688,10 +710,18 @@ class Bob:
         self.indices = np.concatenate(self.indices)
         self.alice_symbols = np.concatenate(self.alice_symbols)
 
-        self.quantum_data_phase_noisy = np.concatenate(dsp_debug.uncorrected_data)
-        self.received_tone = np.concatenate(dsp_debug.tones)
-        self.begin_data = dsp_debug.begin_data
-        self.end_data = dsp_debug.end_data
+        if self.dsp_obj.debug:
+            dsp_debug = self.dsp_obj.get_debug()
+            if "uncorrected_data" in dsp_debug:
+                self.quantum_data_phase_noisy = np.concatenate(
+                    dsp_debug["uncorrected_data"]
+                )
+            if "tones" in dsp_debug:
+                self.received_tone = np.concatenate(dsp_debug["tones"])
+            if "begin_data" in dsp_debug:
+                self.begin_data = dsp_debug["begin_data"]
+            if "end_data" in dsp_debug:
+                self.end_data = dsp_debug["end_data"]
 
         logger.info(
             "Time between end of shot noise and signal : %f ms",
@@ -700,14 +730,10 @@ class Bob:
 
         logger.info("Applying DSP on elec and elec+shot noise data")
 
-        params.elec_noise_estimation_ratio = (
-            self.config.bob.dsp.elec_noise_estimation_ratio
-        )
-        params.elec_shot_noise_estimation_ratio = (
-            self.config.bob.dsp.elec_shot_noise_estimation_ratio
-        )
-        self.electronic_symbols, self.electronic_shot_symbols = special_dsp(
-            self.electronic_noise.data, self.electronic_shot_noise.data, params
+        self.electronic_symbols, self.electronic_shot_symbols = (
+            self.dsp_obj.special_dsp(
+                self.electronic_noise.data, self.electronic_shot_noise.data
+            )
         )
 
         logger.info("DSP end")

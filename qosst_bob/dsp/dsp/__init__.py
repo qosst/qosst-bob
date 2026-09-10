@@ -1,5 +1,9 @@
 # qosst-bob - Bob module of the Quantum Open Software for Secure Transmissions.
-# Copyright (C) 2021-2024 Yoann Piétri
+# Copyright (C) 2021-2026 Yoann Piétri
+# Copyright (C) 2021-2024 Valentina Marulanda Acosta
+# Copyright (C) 2021-2024 Matteo Schiavon
+# Copyright (C) 2021-2026 Thomas Liege
+
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,7 +19,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
-QOSST module for Bob.
+Main module for the DSP algorithm.
+
+Warning: the DSP _dsp_bob_shared_clock_shared_lo, _dsp_bob_shared_clock_unshared_lo and _dsp_bob_unshared_clock_shared_lo
+are adapted versions of old DSP and might not work. They are untested.
 """
 
-__version__ = "0.10.4.dev1"
+from .general import GeneralDSP
+from .general_direct_tracking import GeneralDirectTrackingDSP
+from .shared_clock_shared_lo import SharedClockSharedLODSP
+from .shared_clock_unshared_lo import SharedClockUnsharedLODSP
+from .unshared_clock_shared_lo import UnsharedClockSharedLODSP

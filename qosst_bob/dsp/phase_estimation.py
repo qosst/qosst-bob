@@ -1,7 +1,11 @@
-import numpy as np
+import logging
+from typing import Tuple
+
 import numpy as np
 from numba import njit
 from scipy.ndimage import uniform_filter1d
+
+logger = logging.getLogger(__name__)
 
 
 class ClassicalPhaseEstimator:
@@ -244,3 +248,29 @@ def run_phase_ukf(
         phase_est[k] = x
 
     return phase_est
+
+
+def find_global_angle(
+    received_data: np.ndarray, sent_data: np.ndarray
+) -> Tuple[float, float]:
+    """
+    Find the global angle between received and sent data.
+
+    The best angle is found when the real part of the covariance is the highest
+    between the two sets.
+
+    Args:
+        received_data (np.ndarray): the symbols received by Bob after the DSP.
+        sent_data (np.ndarray): the send symbols by Alice.
+
+    Returns:
+        Tuple[float,float]: the angle that maximises the covariance, in radians, and the maximal covariance.
+    """
+    stack = np.stack((sent_data, received_data), axis=0)
+    cov = np.cov(stack)[0][1]
+    max_angle = np.angle(cov)
+    max_cov = (cov * np.exp(-1j * max_angle)).real
+    logger.debug(
+        "Global angle found : %.2f rad with covariance : %.2f", max_angle, max_cov
+    )
+    return max_angle, max_cov

@@ -26,7 +26,7 @@ import numpy as np
 from scipy import signal
 from scipy.ndimage import uniform_filter1d
 
-from qosst_core.synchronization import SynchronizationSequence
+from qosst_core.synchronization import BaseSynchronizationSequence
 
 from .resample import upsample
 
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # pylint: disable=too-many-arguments
 def synchronize(
     data: np.ndarray,
-    synchro_obj: SynchronizationSequence,
+    synchro_obj: BaseSynchronizationSequence,
     use_abs: bool = False,
     resample: float = 1,
 ) -> Tuple[int, int]:
