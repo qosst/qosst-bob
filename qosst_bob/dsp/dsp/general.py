@@ -113,9 +113,9 @@ class GeneralDSP(DSPWithSpecial):
 
         # Use the base DAC rate if the sample rate of the ZC sequence has not been
         # provided.
-        if synchro_rate == 0:
-            synchro_rate = self.dac_rate
-        sps_approx = int(self.adc_rate / synchro_rate)
+        if self.synchro_rate == 0:
+            self.synchro_rate = self.dac_rate
+        sps_approx = int(self.adc_rate / self.synchro_rate)
 
         # A first approximate search of the start of the ZC sequence, based on the
         # signal envelope.
@@ -198,7 +198,8 @@ class GeneralDSP(DSPWithSpecial):
             data
             * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / equi_adc_rate),
             synchro_obj,
-            resample=equi_adc_rate / synchro_rate,
+            resample=equi_adc_rate / self.synchro_rate,
+            use_abs=self.synchronization_use_abs,
         )
 
         # Now that we have an estimation of the beginning of the synchronization sequence
@@ -222,7 +223,8 @@ class GeneralDSP(DSPWithSpecial):
             data
             * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / equi_adc_rate),
             synchro_obj,
-            resample=equi_adc_rate / synchro_rate,
+            resample=equi_adc_rate / self.synchro_rate,
+            use_abs=self.synchronization_use_abs,
         )
 
         begin_data = end_synchro

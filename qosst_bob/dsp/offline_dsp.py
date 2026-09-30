@@ -43,8 +43,8 @@ def offline_dsp(
     config: Configuration,
     data: List[np.ndarray],
     electronic_noise_data: List[np.ndarray],
+    electronic_shot_noise_data: List[np.ndarray],
     all_alice_symbols: np.ndarray,
-    electronic_shot_noise_data: List[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Perform offline DSP given the configuration object,
@@ -68,9 +68,9 @@ def offline_dsp(
     dsp_obj.configure_from_config(config)
 
     quantum_symbols = dsp_obj.dsp(
-        data,
-        electronic_noise_data,
-        electronic_shot_noise_data,
+        [data],
+        [electronic_noise_data],
+        [electronic_shot_noise_data],
     )
 
     # Correct global phase of each frame of quantum symbols

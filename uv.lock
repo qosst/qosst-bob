@@ -1832,6 +1832,7 @@ source = { editable = "." }
 dependencies = [
     { name = "freesimplegui" },
     { name = "matplotlib" },
+    { name = "numba" },
     { name = "qosst-core" },
     { name = "qosst-hal" },
     { name = "qosst-skr" },
@@ -1861,6 +1862,7 @@ dev = [
 requires-dist = [
     { name = "freesimplegui", specifier = ">=5.1.0" },
     { name = "matplotlib", specifier = ">=3.7.1" },
+    { name = "numba", specifier = ">=0.67.0" },
     { name = "qosst-core", git = "https://github.com/qosst/qosst-core?rev=dev" },
     { name = "qosst-hal", git = "https://github.com/qosst/qosst-hal?rev=dev" },
     { name = "qosst-skr", git = "https://github.com/qosst/qosst-skr?rev=dev" },
@@ -1886,8 +1888,8 @@ dev = [
 
 [[package]]
 name = "qosst-core"
-version = "0.10.4.dev11"
-source = { git = "https://github.com/qosst/qosst-core?rev=dev#29cdb18255432345602e530df84d6044ce7e9604" }
+version = "0.10.4.dev16"
+source = { git = "https://github.com/qosst/qosst-core?rev=dev#6c18a5099c9ace7591d2b34de7cb6cf2d8279d4d" }
 dependencies = [
     { name = "falcon-digital-signature" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },

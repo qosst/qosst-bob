@@ -101,7 +101,10 @@ class UnsharedClockSharedLODSP(DSPWithSpecial):
         if synchro_rate == 0:
             synchro_rate = self.dac_rate
         begin_synchro, end_synchro = synchronize(
-            data, synchro_obj, resample=self.adc_rate / synchro_rate
+            data,
+            synchro_obj,
+            resample=self.adc_rate / synchro_rate,
+            use_abs=self.synchronization_use_abs,
         )
         begin_data = end_synchro
         end_data = int(

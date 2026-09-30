@@ -99,7 +99,10 @@ class SharedClockSharedLODSP(DSPWithSpecial):
         if syncho_rate == 0:
             syncho_rate = self.dac_rate
         begin_synchro, end_synchro = synchronize(
-            data, synchro_obj, resample=self.adc_rate / self.synchro_rate
+            data,
+            synchro_obj,
+            resample=self.adc_rate / self.synchro_rate,
+            use_abs=self.synchronization_use_abs,
         )
         begin_data = end_synchro
         end_data = int(begin_data + self.num_symbols * sps)

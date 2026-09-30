@@ -123,6 +123,7 @@ class SharedClockUnsharedLODSP(DSPWithSpecial):
             * np.exp(-1j * 2 * np.pi * np.arange(len(data)) * f_beat / self.adc_rate),
             synchro_obj,
             resample=self.adc_rate / synchro_rate,
+            use_abs=self.synchronization_use_abs,
         )
 
         begin_data = end_synchro
