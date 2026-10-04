@@ -18,6 +18,7 @@
 """
 Module for equalization.
 """
+
 import logging
 from typing import Tuple, Optional
 

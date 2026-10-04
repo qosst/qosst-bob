@@ -17,6 +17,7 @@
 """
 Layout for Bob gui.
 """
+
 import FreeSimpleGUI as sg
 
 from qosst_bob import __version__

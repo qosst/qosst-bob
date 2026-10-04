@@ -17,4 +17,3 @@
 """
 Digital Signal Processing module for Bob.
 """
-from .dsp import dsp_bob, dsp_bob_params, special_dsp

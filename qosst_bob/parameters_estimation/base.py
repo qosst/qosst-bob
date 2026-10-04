@@ -17,6 +17,7 @@
 """
 Define abstract class for estimators.
 """
+
 import abc
 import logging
 from typing import Tuple

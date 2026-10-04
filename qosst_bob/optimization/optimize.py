@@ -17,6 +17,7 @@
 """
 Script to optimize the excess noise over a DSP parameter.
 """
+
 import sys
 import argparse
 import logging

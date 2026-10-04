@@ -31,6 +31,7 @@ checkboxes required.
 
 This list will also be imported in the gui to detect the different events.
 """
+
 from typing import Callable, Optional
 from os import PathLike
 import gc

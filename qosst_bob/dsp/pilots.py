@@ -17,6 +17,7 @@
 """
 Pilots processing and related functions.
 """
+
 import logging
 from typing import Tuple, List, Optional
 
@@ -262,9 +263,10 @@ def phase_noise_correction(
     Returns:
         np.ndarray: the array of phase difference.
     """
-    expected_phase = np.fmod(
-        0.5 + np.arange(received_tone.size) * frequency / rate,
-        1.0) * 2 * np.pi - np.pi
+    expected_phase = (
+        np.fmod(0.5 + np.arange(received_tone.size) * frequency / rate, 1.0) * 2 * np.pi
+        - np.pi
+    )
     return np.angle(received_tone) - expected_phase
 
 

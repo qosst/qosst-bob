@@ -1,5 +1,5 @@
 # qosst-bob - Bob module of the Quantum Open Software for Secure Transmissions.
-# Copyright (C) 2021-2024 Yoann Piétri
+# Copyright (C) 2021-2026 Yoann Piétri
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@ import logging
 import argparse
 import datetime
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, List
 import warnings
 
 import numpy as np
@@ -33,7 +33,7 @@ from qosst_core.logging import create_loggers
 from qosst_core.configuration.config import Configuration
 
 from qosst_bob import __version__
-from qosst_bob.dsp.dsp import dsp_bob, special_dsp, find_global_angle
+from qosst_bob.dsp.phase_estimation import find_global_angle
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,10 @@ logger = logging.getLogger(__name__)
 # pylint: disable=too-many-locals
 def offline_dsp(
     config: Configuration,
-    data: np.ndarray,
-    electronic_noise_data: np.ndarray,
+    data: List[np.ndarray],
+    electronic_noise_data: List[np.ndarray],
+    electronic_shot_noise_data: List[np.ndarray],
     all_alice_symbols: np.ndarray,
-    electronic_shot_noise_data: np.ndarray = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Perform offline DSP given the configuration object,
@@ -69,8 +69,15 @@ def offline_dsp(
             config.bob.switch.switching_time * config.bob.adc.rate
         )
         electronic_shot_noise_data = data[:end_electronic_shot_noise]
-        
-    quantum_symbols, params, dsp_debug = dsp_bob(data, config)
+
+    dsp_obj = config.bob.dsp.dsp_class()
+    dsp_obj.configure_from_config(config)
+
+    quantum_symbols = dsp_obj.dsp(
+        [data],
+        [electronic_noise_data],
+        [electronic_shot_noise_data],
+    )
 
     # Correct global phase of each frame of quantum symbols
     all_indices = []
@@ -105,20 +112,10 @@ def offline_dsp(
     quantum_symbols = np.concatenate(quantum_symbols)
     all_indices = np.concatenate(all_indices)
 
-    begin_data = dsp_debug.begin_data
-
-    logger.info(
-        "Time between end of shot noise and signal : %f ms",
-        begin_data / config.bob.adc.rate * 1e3,
-    )
-
     logger.info("Applying DSP on elec and elec+shot noise data")
 
-    params.elec_noise_estimation_ratio = config.bob.dsp.elec_noise_estimation_ratio
-    params.elec_shot_noise_estimation_ratio = config.bob.dsp.elec_shot_noise_estimation_ratio
-
-    electronic_symbols, electronic_shot_symbols = special_dsp(
-        electronic_noise_data, electronic_shot_noise_data, params
+    electronic_symbols, electronic_shot_symbols = dsp_obj.special_dsp(
+        electronic_noise_data, electronic_shot_noise_data
     )
 
     return quantum_symbols, all_indices, electronic_symbols, electronic_shot_symbols
@@ -183,10 +180,10 @@ def main():
 
     # Load data and symbols
     electronic_noise_data = np.load(args.elec_data, allow_pickle=True)
-    if args.elec_data.endswith('.qosst'):
+    if args.elec_data.endswith(".qosst"):
         electronic_noise_data = electronic_noise_data.data[0]
     electronic_shot_noise_data = np.load(args.elec_shot_data, allow_pickle=True)
-    if args.elec_shot_data.endswith('.qosst'):
+    if args.elec_shot_data.endswith(".qosst"):
         electronic_shot_noise_data = electronic_shot_noise_data.data[0]
     data = np.load(args.data)
     if len(data.shape) == 2:

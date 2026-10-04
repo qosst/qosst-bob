@@ -17,6 +17,7 @@
 """
 Module for QOSST data specific to Bob.
 """
+
 from typing import List, Dict, Optional
 import datetime
 

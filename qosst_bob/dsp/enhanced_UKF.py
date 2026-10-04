@@ -1,35 +1,27 @@
+from typing import Optional
+
 import numpy as np
 from numba import njit
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import welch
-from qosst_core.dsp.phase_estimator import PhaseEstimator
+
+from qosst_core.dsp.phase_estimator import BasePhaseEstimator
 
 # Combined Alice + Bob LO linewidth (Hz), best value found on the test captures
 LINEWIDTH = 300.0
 
 
-class EnhancedUKFPhaseEstimator(PhaseEstimator):
-    def __init__(
-            self,
-            adc_rate,
-            decimation: int = 80,
-            smooth: bool = True,
-            amplitude_window: int = 1000,
-            **kwargs
-            ):
-        self.adc_rate = adc_rate
-        self.linewidth = LINEWIDTH
-        self.decimation = decimation
-        self.smooth = smooth
-        self.amplitude_window = amplitude_window
+class EnhancedUKFPhaseEstimator(BasePhaseEstimator):
+    decimation: int = 80
+    smooth: bool = True
+    amplitude_window: int = 1000
 
     def estimate_phase(
-            self,
-            pilot_data: np.ndarray,
-            shot_noise_data: np.ndarray,
-            pilot_data_2: np.ndarray = None,
-            **kwargs,
-            ) -> np.ndarray:
+        self,
+        pilot_data: np.ndarray,
+        shot_noise_data: Optional[np.ndarray] = None,
+        pilot_data_2: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """
         Estimate the phase of the pilot with a UKF using physical noise parameters.
 

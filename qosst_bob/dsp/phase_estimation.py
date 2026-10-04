@@ -1,76 +1,63 @@
-import numpy as np
+import logging
+from functools import lru_cache
+from typing import Tuple, Optional
+
 import numpy as np
 from numba import njit
 from scipy.ndimage import uniform_filter1d
-from scipy.signal import welch
-from qosst_core.dsp.phase_estimator import PhaseEstimator
-import logging
-from functools import lru_cache
-from scipy.signal import savgol_coeffs, savgol_filter, oaconvolve
+from scipy.signal import welch, savgol_coeffs, savgol_filter, oaconvolve
 
+from qosst_core.dsp.phase_estimator import BasePhaseEstimator
 
 logger = logging.getLogger(__name__)
 
-class ClassicalPhaseEstimator(PhaseEstimator):
-    def __init__(
-            self,
-            pilot_phase_filtering_size,
-            pilot_frequency_filtering_size,
-            **kwargs
-            ):
-        self.pilot_phase_filtering_size = pilot_phase_filtering_size
-        self.pilot_frequency_filtering_size = pilot_frequency_filtering_size
 
+class ClassicalPhaseEstimator(BasePhaseEstimator):
     def estimate_phase(
-            self, 
-            pilot_data: np.ndarray,
-            **kwargs,
-            ) -> np.ndarray:
+        self,
+        pilot_data: np.ndarray,
+        shot_noise_data: Optional[np.ndarray] = None,
+        pilot_data_2: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """
         Estimate the phase of the signal using the pilot tone.
         """
         pilot_angle = np.angle(pilot_data)
 
-        if self.pilot_phase_filtering_size > 1 or self.pilot_frequency_filtering_size > 1:
+        if (
+            self.pilot_phase_filtering_size > 1
+            or self.pilot_frequency_filtering_size > 1
+        ):
+            print("Filtering pilot")
             # The unwrapped angle can grow into a large number, but the full
             # precision is needed. Convert to double.
-            pilot_angle = np.unwrap(pilot_angle.astype('d'))
+            pilot_angle = np.unwrap(pilot_angle.astype("d"))
             if self.pilot_phase_filtering_size > 1:
                 pilot_angle = uniform_filter1d(
-                    pilot_angle,
-                    self.pilot_phase_filtering_size
+                    pilot_angle, self.pilot_phase_filtering_size
                 )
 
             if self.pilot_frequency_filtering_size > 1:
-                pilot_angle = np.cumsum(uniform_filter1d(
-                    np.diff(pilot_angle, append=pilot_angle[-1]),
-                    self.pilot_frequency_filtering_size)
+                pilot_angle = np.cumsum(
+                    uniform_filter1d(
+                        np.diff(pilot_angle, append=pilot_angle[-1]),
+                        self.pilot_frequency_filtering_size,
+                    )
                 )
         return pilot_angle
-    
 
-class UKFPhaseEstimator:
-    def __init__(
-            self,
-            linewidth,
-            adc_rate,
-            alpha=1e-3,
-            beta=2.0,
-            kappa=0.0,
-            **kwargs
-            ):
-        self.linewidth = linewidth
-        self.adc_rate = adc_rate
-        self.alpha = alpha
-        self.beta = beta
-        self.kappa = kappa
+
+class UKFPhaseEstimator(BasePhaseEstimator):
+    alpha: float = 1e-3
+    beta: float = 2.0
+    kappa: float = 0.0
 
     def estimate_phase(
         self,
         pilot_data: np.ndarray,
-        shot_noise_data: np.ndarray,
-        **kwargs,
-        ) -> np.ndarray:
+        shot_noise_data: Optional[np.ndarray] = None,
+        pilot_data_2: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """
         Estimate the phase of the signal using the pilot tone and the UKF.
 
@@ -82,23 +69,22 @@ class UKFPhaseEstimator:
         Returns:
             - estimated_phase: array of estimated phase values
         """
-        # Set measurement noise covariance R based on shot noise variance
-        Q = 2 * np.pi * self.linewidth * (1/self.adc_rate)
-        R = np.array([[np.var(shot_noise_data.real), 0],
-                    [0, np.var(shot_noise_data.imag)]])
-
-        # Estimate a linear frequency offset from the pilot data
-        k = np.arange(len(pilot_data)) 
+        process_noise_covariance = 2 * np.pi * self.linewidth * (1 / self.adc_rate)
+        measurement_noise_covariance = np.array(
+            [[np.var(shot_noise_data.real), 0], [0, np.var(shot_noise_data.imag)]]
+        )
         phase_diff = np.angle(pilot_data[1:] * np.conj(pilot_data[:-1]))
         delta_omega_est = np.mean(phase_diff)
+
+        k = np.arange(len(pilot_data))
         pilot_baseband = pilot_data * np.exp(-1j * delta_omega_est * k)
 
         estimated_phase = run_phase_ukf(
             pilot_baseband.real,
             pilot_baseband.imag,
-            Q,
-            R,
-            A = np.mean(np.abs(pilot_data)),
+            process_noise_covariance,
+            measurement_noise_covariance,
+            amplitude=np.mean(np.abs(pilot_data)),
             alpha=self.alpha,
             beta=self.beta,
             kappa=self.kappa,
@@ -107,17 +93,19 @@ class UKFPhaseEstimator:
 
         return estimated_phase
 
+
+# pylint:disable=too-many-arguments, too-many-positional-arguments, too-many-locals, too-many-statements
 @njit
 def run_phase_ukf(
-        z_real: np.ndarray, 
-        z_imag: np.ndarray,
-        Q: float,
-        R: np.ndarray,
-        A: float=1.0,
-        alpha: float=1e-3,
-        beta: float=2.0,
-        kappa: float=0.0
-    ) -> np.ndarray:
+    z_real: np.ndarray,
+    z_imag: np.ndarray,
+    process_noise_covariance: float,
+    measurement_noise_covariance: np.ndarray,
+    amplitude: float = 1.0,
+    alpha: float = 1e-3,
+    beta: float = 2.0,
+    kappa: float = 0.0,
+) -> np.ndarray:
     """
     Run a UKF to estimate the phase of a signal given noisy measurements of its cosine and sine projections.
 
@@ -127,19 +115,24 @@ def run_phase_ukf(
         - Q: process noise covariance
         - R: measurement noise covariance matrix (2x2)
         - A: amplitude of the signal
-        - alpha, beta, kappa: UKF scaling parameters    
+        - alpha, beta, kappa: UKF scaling parameters
     Returns:
         - phase_est: array of estimated phase values
     """
-    assert z_real.shape == z_imag.shape, "Real and imaginary measurement arrays must have the same shape"
-    assert R.shape == (2, 2), "Measurement noise covariance R must be a 2x2 matrix"
-    assert Q >= 0, "Process noise covariance Q must be positive"
+    assert (
+        z_real.shape == z_imag.shape
+    ), "Real and imaginary measurement arrays must have the same shape"
+    assert measurement_noise_covariance.shape == (
+        2,
+        2,
+    ), "Measurement noise covariance R must be a 2x2 matrix"
+    assert process_noise_covariance > 0, "Process noise covariance Q must be positive"
 
-    R00 = R[0, 0]
-    R01 = R[0, 1]
-    R11 = R[1, 1]
-    N = len(z_real)
-    phase_est = np.zeros(N)
+    r00 = measurement_noise_covariance[0, 0]
+    r01 = measurement_noise_covariance[0, 1]
+    r11 = measurement_noise_covariance[1, 1]
+    n = len(z_real)
+    phase_est = np.zeros(n)
 
     # UKF parameters for 1D state (phase)
     # lambda_, gamma: scaling parameters for sigma points
@@ -147,96 +140,96 @@ def run_phase_ukf(
     gamma = np.sqrt(1.0 + lambda_)
 
     # Weights for mean and covariance
-    Wm0 = lambda_ / (1.0 + lambda_)
-    Wc0 = Wm0 + (1.0 - alpha**2 + beta)
-    Wi  = 1.0 / (2.0 * (1.0 + lambda_))
+    wm0 = lambda_ / (1.0 + lambda_)
+    wc0 = wm0 + (1.0 - alpha**2 + beta)
+    wi = 1.0 / (2.0 * (1.0 + lambda_))
 
     # Initial state estimate (phase) and covariance
     x = np.angle(z_real[0] + 1j * z_imag[0])  # initial phase estimate
-    P = 0.1  # initial phase variance
+    phase_variance = 0.1  # initial phase variance
 
-    for k in range(N):
+    for k in range(n):
         # Increase covariance by process noise Q
-        P = P + Q
+        phase_variance = phase_variance + process_noise_covariance
 
-        sqrtP = np.sqrt(P)
+        sqrt_p = np.sqrt(phase_variance)
 
         # Generate sigma points for the phase
         x0 = x
-        x1 = x + gamma * sqrtP
-        x2 = x - gamma * sqrtP
+        x1 = x + gamma * sqrt_p
+        x2 = x - gamma * sqrt_p
 
         # Predict measurement for each sigma point (cosine and sine projections)
-        c0 = A * np.cos(x0)
-        s0 = A * np.sin(x0)
+        c0 = amplitude * np.cos(x0)
+        s0 = amplitude * np.sin(x0)
 
-        c1 = A * np.cos(x1)
-        s1 = A * np.sin(x1)
+        c1 = amplitude * np.cos(x1)
+        s1 = amplitude * np.sin(x1)
 
-        c2 = A * np.cos(x2)
-        s2 = A * np.sin(x2)
+        c2 = amplitude * np.cos(x2)
+        s2 = amplitude * np.sin(x2)
 
         # Weighted mean of predicted measurements
-        z_pred0 = Wm0*c0 + Wi*c1 + Wi*c2  # mean of cosines
-        z_pred1 = Wm0*s0 + Wi*s1 + Wi*s2  # mean of sines
+        z_pred0 = wm0 * c0 + wi * c1 + wi * c2  # mean of cosines
+        z_pred1 = wm0 * s0 + wi * s1 + wi * s2  # mean of sines
 
         # Start with measurement noise covariance
-        S00 = R00
-        S01 = R01
-        S11 = R11
+        s00 = r00
+        s01 = r01
+        s11 = r11
 
         # Add contributions from each sigma point
         # sigma 0
         dz0_0 = c0 - z_pred0
         dz0_1 = s0 - z_pred1
-        S00 += Wc0 * dz0_0 * dz0_0
-        S01 += Wc0 * dz0_0 * dz0_1
-        S11 += Wc0 * dz0_1 * dz0_1
+        s00 += wc0 * dz0_0 * dz0_0
+        s01 += wc0 * dz0_0 * dz0_1
+        s11 += wc0 * dz0_1 * dz0_1
 
         # sigma 1
         dz1_0 = c1 - z_pred0
         dz1_1 = s1 - z_pred1
-        S00 += Wi * dz1_0 * dz1_0
-        S01 += Wi * dz1_0 * dz1_1
-        S11 += Wi * dz1_1 * dz1_1
+        s00 += wi * dz1_0 * dz1_0
+        s01 += wi * dz1_0 * dz1_1
+        s11 += wi * dz1_1 * dz1_1
 
         # sigma 2
         dz2_0 = c2 - z_pred0
         dz2_1 = s2 - z_pred1
-        S00 += Wi * dz2_0 * dz2_0
-        S01 += Wi * dz2_0 * dz2_1
-        S11 += Wi * dz2_1 * dz2_1
+        s00 += wi * dz2_0 * dz2_0
+        s01 += wi * dz2_0 * dz2_1
+        s11 += wi * dz2_1 * dz2_1
 
         # Cross covariance between phase and measurement
-        Pxz0 = 0.0
-        Pxz1 = 0.0
+        pxz0 = 0.0
+        pxz1 = 0.0
 
         # sigma 0
         dx0 = x0 - x
-        Pxz0 += Wc0 * dx0 * dz0_0
-        Pxz1 += Wc0 * dx0 * dz0_1
+        pxz0 += wc0 * dx0 * dz0_0
+        pxz1 += wc0 * dx0 * dz0_1
 
         # sigma 1
         dx1 = x1 - x
-        Pxz0 += Wi * dx1 * dz1_0
-        Pxz1 += Wi * dx1 * dz1_1
+        pxz0 += wi * dx1 * dz1_0
+        pxz1 += wi * dx1 * dz1_1
 
         # sigma 2
         dx2 = x2 - x
-        Pxz0 += Wi * dx2 * dz2_0
-        Pxz1 += Wi * dx2 * dz2_1
+        pxz0 += wi * dx2 * dz2_0
+        pxz1 += wi * dx2 * dz2_1
 
         # Kalman gain calculation (for 2D measurement)
         # Invert 2x2 innovation covariance matrix
-        detS = S00*S11 - S01*S01
+        det_s = s00 * s11 - s01 * s01
 
-        invS00 =  S11 / detS
-        invS01 = -S01 / detS
-        invS11 =  S00 / detS
+        inv_s00 = s11 / det_s
+        inv_s01 = -s01 / det_s
+        inv_s11 = s00 / det_s
 
         # Kalman gain for each measurement dimension
-        K0 = Pxz0*invS00 + Pxz1*invS01
-        K1 = Pxz0*invS01 + Pxz1*invS11
+        k0 = pxz0 * inv_s00 + pxz1 * inv_s01
+        k1 = pxz0 * inv_s01 + pxz1 * inv_s11
 
         # Update step
         # Innovation (difference between actual and predicted measurement)
@@ -244,9 +237,10 @@ def run_phase_ukf(
         innov1 = z_imag[k] - z_pred1
 
         # Update phase estimate and covariance
-        x = x + K0*innov0 + K1*innov1
-        P = P - (K0*(S00*K0 + S01*K1) +
-                K1*(S01*K0 + S11*K1))
+        x = x + k0 * innov0 + k1 * innov1
+        phase_variance = phase_variance - (
+            k0 * (s00 * k0 + s01 * k1) + k1 * (s01 * k0 + s11 * k1)
+        )
 
         # Store phase estimate
         phase_est[k] = x
@@ -254,19 +248,35 @@ def run_phase_ukf(
     return phase_est
 
 
-class WienerPhaseEstimator(PhaseEstimator):
-    def __init__(
-            self,
-            adc_rate,
-            nperseg: int = 32768,
-            bpf_cutoff_hz: float = None,
-            linewidth: float = None,
-            **kwargs
-        ):
-        self.adc_rate = adc_rate
-        self.nperseg = nperseg
-        self.bpf_cutoff_hz = bpf_cutoff_hz if bpf_cutoff_hz is not None else adc_rate / 8
-        self.linewidth = linewidth
+def find_global_angle(
+    received_data: np.ndarray, sent_data: np.ndarray
+) -> Tuple[float, float]:
+    """
+    Find the global angle between received and sent data.
+
+    The best angle is found when the real part of the covariance is the highest
+    between the two sets.
+
+    Args:
+        received_data (np.ndarray): the symbols received by Bob after the DSP.
+        sent_data (np.ndarray): the send symbols by Alice.
+
+    Returns:
+        Tuple[float,float]: the angle that maximises the covariance, in radians, and the maximal covariance.
+    """
+    stack = np.stack((sent_data, received_data), axis=0)
+    cov = np.cov(stack)[0][1]
+    max_angle = np.angle(cov)
+    max_cov = (cov * np.exp(-1j * max_angle)).real
+    logger.debug(
+        "Global angle found : %.2f rad with covariance : %.2f", max_angle, max_cov
+    )
+    return max_angle, max_cov
+
+
+class WienerPhaseEstimator(BasePhaseEstimator):
+    nperseg: int = 32768
+    bpf_cutoff_hz: Optional[float] = None
 
     def _compute_noise_floor(
         self,
@@ -285,31 +295,33 @@ class WienerPhaseEstimator(PhaseEstimator):
                 return_onesided=False,
             )
             freqs_sn = np.fft.fftshift(freqs_sn)
-            S_Q      = np.fft.fftshift(S_Q)
-            return np.interp(freqs, freqs_sn, S_Q) / (A_pilot ** 2)
-        else:
-            hf_mask = np.abs(freqs) > (self.adc_rate / 4)
-            if hf_mask.sum() == 0:
-                hf_mask = np.abs(freqs) > (self.adc_rate / 8)
-            return np.median(S_total[hf_mask]) * np.ones_like(freqs)
+            S_Q = np.fft.fftshift(S_Q)
+            return np.interp(freqs, freqs_sn, S_Q) / (A_pilot**2)
+        hf_mask = np.abs(freqs) > (self.adc_rate / 4)
+        if hf_mask.sum() == 0:
+            hf_mask = np.abs(freqs) > (self.adc_rate / 8)
+        return np.median(S_total[hf_mask]) * np.ones_like(freqs)
 
     def estimate_phase(
         self,
         pilot_data: np.ndarray,
-        shot_noise_data: np.ndarray = None,
-        **kwargs,
+        shot_noise_data: Optional[np.ndarray] = None,
+        pilot_data_2: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Estimates the pilot phase via a Wiener filter.
 
         Model-based : the signal PSD is the theoretical
         Lorentzian S_laser(f) = linewidth/(2π f²) of a laser phase random walk.
-        H(f) = S_laser / (S_laser + S_eta). 
-        
+        H(f) = S_laser / (S_laser + S_eta).
+
         S_eta is taken from the shot noise quadrature PSD scaled
         by the pilot amplitude (S_Q/A²), or falls back to the HF tail of S_total.
-        H is forced to 0 above bpf_cutoff_hz.
+        H is forced to 0 above bpf_cutoff_hz (adc_rate / 8 if None).
         """
+        bpf_cutoff_hz = (
+            self.bpf_cutoff_hz if self.bpf_cutoff_hz is not None else self.adc_rate / 8
+        )
         N = len(pilot_data)
         pilot_phase = np.unwrap(np.angle(pilot_data))
 
@@ -319,14 +331,16 @@ class WienerPhaseEstimator(PhaseEstimator):
             S_laser = np.where(
                 freqs == 0,
                 np.inf,
-                self.linewidth / (2.0 * np.pi * freqs ** 2),
+                self.linewidth / (2.0 * np.pi * freqs**2),
             )
 
         # Noise floor (shot-noise-based or HF fallback).
         if shot_noise_data is None:
             freqs_w, S_total = welch(
-                pilot_phase, fs=self.adc_rate,
-                nperseg=self.nperseg, return_onesided=False,
+                pilot_phase,
+                fs=self.adc_rate,
+                nperseg=self.nperseg,
+                return_onesided=False,
             )
             freqs_w = np.fft.fftshift(freqs_w)
             S_total = np.fft.fftshift(S_total)
@@ -337,16 +351,16 @@ class WienerPhaseEstimator(PhaseEstimator):
 
         H = S_laser / (S_laser + np.maximum(S_eta, 0))
         H = np.clip(np.where(np.isfinite(H), H, 1.0), 0.0, 1.0)
-        H[np.abs(freqs) > self.bpf_cutoff_hz] = 0.0
+        H[np.abs(freqs) > bpf_cutoff_hz] = 0.0
 
         H_full = np.fft.ifftshift(H)
 
         PILOT_F = np.fft.fft(pilot_phase)
         phi_est = np.fft.ifft(H_full * PILOT_F).real
         return phi_est
-    
 
-class SavGolPhaseEstimator(PhaseEstimator):
+
+class SavGolPhaseEstimator(BasePhaseEstimator):
     """
     Phase estimator similar to ClassicalPhaseEstimator, but using Savitzky-Golay filters.
 
@@ -361,24 +375,10 @@ class SavGolPhaseEstimator(PhaseEstimator):
     - phase and frequency smoothing can use different polynomial orders
     """
 
-    def __init__(
-        self,
-        adc_rate: float,
-        pilot_phase_filtering_size: int = 0,
-        pilot_frequency_filtering_size: int = 0,
-        savgol_phase_polyorder: int = 2,
-        savgol_frequency_polyorder: int = 2,
-        savgol_mode: str = "mirror",
-        savgol_use_fft: bool = True,
-        **kwargs,
-    ):
-        self.adc_rate = adc_rate
-        self.pilot_phase_filtering_size = int(pilot_phase_filtering_size)
-        self.pilot_frequency_filtering_size = int(pilot_frequency_filtering_size)
-        self.savgol_phase_polyorder = int(savgol_phase_polyorder)
-        self.savgol_frequency_polyorder = int(savgol_frequency_polyorder)
-        self.savgol_mode = savgol_mode
-        self.savgol_use_fft = bool(savgol_use_fft)
+    savgol_phase_polyorder: int = 2
+    savgol_frequency_polyorder: int = 2
+    savgol_mode: str = "mirror"
+    savgol_use_fft: bool = True
 
     def _apply_savgol(
         self,
@@ -423,7 +423,8 @@ class SavGolPhaseEstimator(PhaseEstimator):
     def estimate_phase(
         self,
         pilot_data: np.ndarray,
-        **kwargs,
+        shot_noise_data: Optional[np.ndarray] = None,
+        pilot_data_2: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Estimate the phase of a pilot tone already shifted to baseband.
@@ -439,7 +440,7 @@ class SavGolPhaseEstimator(PhaseEstimator):
         if self.pilot_phase_filtering_size > 1:
             pilot_angle = self._apply_savgol(
                 pilot_angle,
-                self.pilot_phase_filtering_size,
+                int(self.pilot_phase_filtering_size),
                 self.savgol_phase_polyorder,
             )
 
@@ -448,13 +449,13 @@ class SavGolPhaseEstimator(PhaseEstimator):
             dphi = np.diff(pilot_angle, append=pilot_angle[-1])
             dphi = self._apply_savgol(
                 dphi,
-                self.pilot_frequency_filtering_size,
+                int(self.pilot_frequency_filtering_size),
                 self.savgol_frequency_polyorder,
             )
             pilot_angle = np.cumsum(dphi)
 
         return np.asarray(pilot_angle, dtype=np.float64)
-    
+
 
 def _prepare_savgol_window(window_length: int, polyorder: int, n: int) -> int:
     """
@@ -556,7 +557,6 @@ def _fast_savgol_filter_fft(
 
     x_pad = np.pad(x, (half, half), mode=pad_mode)
     y_pad = oaconvolve(x_pad, kernel, mode="same")
-    y = y_pad[half:half + n]
+    y = y_pad[half : half + n]
 
     return y
-
