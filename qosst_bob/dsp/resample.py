@@ -18,7 +18,9 @@
 Modules to resample data (mostly downsample) and associated functions.
 """
 import numpy as np
+from numba import njit, prange
 from scipy import signal
+from scipy.special import i0
 
 
 def downsample(
@@ -252,3 +254,62 @@ def _upsample_linear_interpolation(data: np.ndarray, upsampling_factor) -> np.nd
     x0 = data[index_integral]
     x1 = data[np.minimum(index_integral + 1, n - 1)]
     return x0 + (x1 - x0) * index_fractional
+
+
+def fractional_resample(
+        x: np.ndarray,
+        epsilon: float,
+        start: float = 0.0,
+        half_width: int = 10,
+        beta: float = 5.0,
+        grid: int = 4096,
+    ) -> np.ndarray:
+    """
+    Resample data at the positions start + n (1 + epsilon), for a rate ratio close to 1 given exactly (float).
+
+    Same Kaiser-windowed sinc as scipy's resample_poly (unit DC gain, zero padding), evaluated directly at the output
+    positions instead of a polyphase filter of 20 max(up, down) taps on a rational approximation of the ratio.
+
+    Args:
+        x (np.ndarray): the data to resample.
+        epsilon (float): rate change, the output sample n is taken at the input position start + n (1 + epsilon).
+        start (float, optional): position of the first output sample, in input samples. Defaults to 0.
+        half_width (int, optional): half width of the windowed sinc, in input samples. Defaults to 10 (as resample_poly).
+        beta (float, optional): beta of the Kaiser window. Defaults to 5 (as resample_poly).
+        grid (int, optional): number of points per input sample of the lookup table of the kernel. Defaults to 4096.
+
+    Returns:
+        np.ndarray: resampled data (complex64), of length ceil(len(x) / (1 + epsilon)).
+    """
+    r = 1.0 / (1.0 + epsilon)
+    half = half_width / r
+    table = _fractional_kernel_table(r, half, beta, grid)
+    n_out = int(np.ceil(len(x) * r))
+    return _fractional_resample(np.ascontiguousarray(x, dtype=np.complex64), n_out, start, 1.0 + epsilon, table,
+                                (len(table) - 1) / 2, half, grid)
+
+
+def _fractional_kernel_table(r: float, half: float, beta: float, grid: int) -> np.ndarray:
+    """Kernel r sinc(r tau) kaiser(tau) on tau = k / grid, |tau| <= half, normalised to unit area."""
+    tau = np.arange(-int(np.ceil(half * grid)) - 2, int(np.ceil(half * grid)) + 3) / grid
+    arg = np.clip(1 - (tau / half) ** 2, 0, None)
+    g = r * np.sinc(r * tau) * i0(beta * np.sqrt(arg)) / i0(beta) * (np.abs(tau) <= half)
+    return g / (np.sum(g) / grid)
+
+
+@njit(parallel=True)
+def _fractional_resample(x, n_out, start, step, table, center, half, grid):
+    out = np.empty(n_out, dtype=np.complex64)
+    n_in = len(x)
+    for n in prange(n_out):
+        t = start + n * step
+        lo = max(int(np.ceil(t - half)), 0)
+        hi = min(int(np.floor(t + half)), n_in - 1)
+        acc = 0j
+        for i in range(lo, hi + 1):
+            p = (i - t) * grid + center
+            k = int(p)
+            w = table[k] + (p - k) * (table[k + 1] - table[k])
+            acc += x[i] * w
+        out[n] = acc
+    return out

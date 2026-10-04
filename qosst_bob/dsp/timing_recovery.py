@@ -5,7 +5,8 @@ from scipy.signal import resample_poly
 from numba import njit
 from .resample import (
     _best_sampling_point_float,
-    upsample
+    upsample,
+    fractional_resample
 )
 import logging
 from scipy.signal import lfilter, butter, sosfiltfilt
@@ -150,19 +151,17 @@ class StaticTimingRecovery(TimingRecoveryEstimator):
             frequency_shift = self.frequency_shift
         )
 
-        epsilon = self.offset / len(data)
-        denom = 10_000_000
-        numer = int(round(denom / (1 + epsilon)))
-        g = gcd(numer, denom)
-        data = resample_poly(
-            data, numer // g, denom // g
-        ).astype(np.complex64)
+        # exact float ratio (any offset), same kernel as resample_poly; kept for the special DSP (elec and shot noise)
+        self.resample_epsilon = self.offset / len(data)
+        # fractional part of the initial sampling point as the start of the resampling (exact non-integer timing)
+        start = self.initial_sampling_point % 1 if self.symbol_timing_oversampling == 1 else 0.0
+        data = fractional_resample(data, self.resample_epsilon, start)
         data *= shift_up[:len(data)]
         data = oaconvolve(data, rrc_filter, "same")
         if self.symbol_timing_oversampling != 1:          # <-- add this
             data = upsample(data, self.symbol_timing_oversampling, 2)
         best_grid = np.round(
-            self.initial_sampling_point + self.sps * self.symbol_timing_oversampling * np.arange(self.num_symbols)
+            self.initial_sampling_point - start + self.sps * self.symbol_timing_oversampling * np.arange(self.num_symbols)
         ).astype(int)
 
 

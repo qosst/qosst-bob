@@ -67,8 +67,9 @@ class UKFPhaseEstimator:
 
     def estimate_phase(
         self,
-        pilot_data: np.ndarray, 
+        pilot_data: np.ndarray,
         shot_noise_data: np.ndarray,
+        **kwargs,
         ) -> np.ndarray:
         """
         Estimate the phase of the signal using the pilot tone and the UKF.
@@ -265,11 +266,6 @@ class WienerPhaseEstimator(PhaseEstimator):
         self.adc_rate = adc_rate
         self.nperseg = nperseg
         self.bpf_cutoff_hz = bpf_cutoff_hz if bpf_cutoff_hz is not None else adc_rate / 8
-        # If linewidth is given, use the model-based Wiener filter.
-        # The signal PSD is modelled as a Lorentzian (laser phase random walk):
-        #   S_laser(f) = linewidth / (2π f²)
-        # which is the continuous-time PSD of a Wiener process whose increments
-        # have variance Q = 2π * linewidth / fs per sample.
         self.linewidth = linewidth
 
     def _compute_noise_floor(
