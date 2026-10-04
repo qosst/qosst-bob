@@ -29,7 +29,7 @@ from scipy.signal import oaconvolve, firwin
 
 from qosst_core.comm.filters import root_raised_cosine_filter
 from qosst_core.schema.detection import SINGLE_POLARISATION_RF_HETERODYNE
-from qosst_bob.dsp.phase_estimation import ClassicalPhaseEstimator
+from qosst_bob.dsp.phase_estimator import ClassicalPhaseEstimator
 from qosst_bob.dsp.synchro import synchronize
 from qosst_bob.dsp.pilots import (
     find_one_pilot,
@@ -270,49 +270,42 @@ class GeneralDirectTrackingDSP(DSPWithSpecial):
             / equi_adc_rate
         ).astype(np.complex64)
 
-        # Pre-compute the filter extracting the pilot tone.
-        pilot_bp_filter = (
-            firwin(self.fir_size, self.tone_filtering_cutoff / equi_adc_rate)
-            * np.exp(
-                1j
-                * 2
-                * np.pi
-                * np.arange(self.fir_size)
-                * f_pilot_real_1
-                / equi_adc_rate
-            )
-        ).astype(np.complex64)
-
-        # Correct the phase noise on the whole frame before starting to extract symbols,
-        # to avoid the boundary effects of the filters on the subframes.
-        logger.info("Recovering first pilot tone")
-        print(pilot_bp_filter.shape)
-        print(useful_data.shape)
-        print(electronic_shot_noise_data.shape)
-        pilot_data = oaconvolve(useful_data, pilot_bp_filter, mode="same")
-        shot_noise_data = oaconvolve(
-            electronic_shot_noise_data[0], pilot_bp_filter, mode="same"
+        # Pre-compute the filters extracting the pilot tones.
+        real_pilots_frequencies = (
+            [f_pilot_real_1, f_pilot_real_2]
+            if self.num_pilots == 2
+            else [f_pilot_real_1]
         )
-        if self.debug:
-            self.debug_object["tones"].append(pilot_data)
-
-        pilot_data_2 = None
-        if self.num_pilots == 2:
-            logger.info("Recovering second pilot tone")
-            pilot_bp_filter_2 = (
+        pilot_bp_filters = [
+            (
                 firwin(self.fir_size, self.tone_filtering_cutoff / equi_adc_rate)
                 * np.exp(
                     1j
                     * 2
                     * np.pi
                     * np.arange(self.fir_size)
-                    * f_pilot_real_2
+                    * f_pilot_real
                     / equi_adc_rate
                 )
             ).astype(np.complex64)
-            pilot_data_2 = oaconvolve(useful_data, pilot_bp_filter_2, mode="same")
-            if self.debug:
-                self.debug_object["tones"].append(pilot_data_2)
+            for f_pilot_real in real_pilots_frequencies
+        ]
+
+        # Correct the phase noise on the whole frame before starting to extract symbols,
+        # to avoid the boundary effects of the filters on the subframes.
+        logger.info("Recovering pilot tones")
+        print(pilot_bp_filters[0].shape)
+        print(useful_data.shape)
+        print(electronic_shot_noise_data.shape)
+        pilot_data = [
+            oaconvolve(useful_data, pilot_bp_filter, mode="same")
+            for pilot_bp_filter in pilot_bp_filters
+        ]
+        shot_noise_data = oaconvolve(
+            electronic_shot_noise_data[0], pilot_bp_filters[0], mode="same"
+        )
+        if self.debug:
+            self.debug_object["tones"].extend(pilot_data)
 
         logger.info("Correcting phase noise on the whole frame")
         phase_estimator = self.phase_estimator_cls(
@@ -321,9 +314,7 @@ class GeneralDirectTrackingDSP(DSPWithSpecial):
             adc_rate=equi_adc_rate,
             linewidth=self.linewidth,
         )
-        phase_noise = phase_estimator.estimate_phase(
-            pilot_data, shot_noise_data, pilot_data_2
-        )
+        phase_noise = phase_estimator.estimate_phase(pilot_data, shot_noise_data)
 
         clean_pilot = np.exp(-1j * phase_noise).astype(np.complex64)
 

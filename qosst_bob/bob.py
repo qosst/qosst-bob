@@ -45,7 +45,7 @@ from qosst_hal.polarisation_controller import (
 )
 from qosst_hal.powermeter import GenericPowerMeter
 
-from qosst_bob.dsp.phase_estimation import find_global_angle
+from qosst_bob.dsp.phase_estimator import find_global_angle
 from qosst_bob.data import ElectronicNoise, ElectronicShotNoise
 
 logger = logging.getLogger(__name__)

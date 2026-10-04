@@ -33,7 +33,7 @@ from qosst_core.logging import create_loggers
 from qosst_core.configuration.config import Configuration
 
 from qosst_bob import __version__
-from qosst_bob.dsp.phase_estimation import find_global_angle
+from qosst_bob.dsp.phase_estimator import find_global_angle
 
 logger = logging.getLogger(__name__)
 
