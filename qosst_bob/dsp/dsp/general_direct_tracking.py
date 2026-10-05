@@ -239,36 +239,13 @@ class GeneralDirectTrackingDSP(DSPWithSpecial):
             self.debug_object["tones"] = []
             self.debug_object["uncorrected_data"] = []
 
-        begin_subframe = 0
-        end_subframe = int(np.ceil(self.subframe_length * (sps + 1) - 0.5))
         result = []
-        num_symbols_recovered = 0
 
         # Number of samples to include from the previous subframe to account for
         # the boundary conditions of the filters.
         num_samples_previous_subframe = max(
             self.pilot_phase_filtering_size, self.fir_size
         )
-
-        # Pre-compute the RRC filter.
-        _, rrc_filter = root_raised_cosine_filter(
-            int(10 * sps + 2),
-            self.roll_off,
-            1 / self.symbol_rate,
-            equi_adc_rate,
-        )
-        rrc_filter = (rrc_filter[1:] / np.sqrt(sps)).astype(np.complex64)
-
-        # Pre-compute the complex exponential for shifting.
-        shift_size = self.subframe_length * (sps + 1) + num_samples_previous_subframe
-        shift_up = np.exp(
-            1j
-            * 2
-            * np.pi
-            * np.arange(shift_size)
-            * (f_pilot_1 - self.frequency_shift)
-            / equi_adc_rate
-        ).astype(np.complex64)
 
         # Pre-compute the filters extracting the pilot tones.
         real_pilots_frequencies = (
@@ -294,15 +271,13 @@ class GeneralDirectTrackingDSP(DSPWithSpecial):
         # Correct the phase noise on the whole frame before starting to extract symbols,
         # to avoid the boundary effects of the filters on the subframes.
         logger.info("Recovering pilot tones")
-        print(pilot_bp_filters[0].shape)
-        print(useful_data.shape)
-        print(electronic_shot_noise_data.shape)
+
         pilot_data = [
             oaconvolve(useful_data, pilot_bp_filter, mode="same")
             for pilot_bp_filter in pilot_bp_filters
         ]
         shot_noise_data = oaconvolve(
-            electronic_shot_noise_data[0], pilot_bp_filters[0], mode="same"
+            electronic_shot_noise_data, pilot_bp_filters[0], mode="same"
         )
         if self.debug:
             self.debug_object["tones"].extend(pilot_data)
@@ -333,62 +308,10 @@ class GeneralDirectTrackingDSP(DSPWithSpecial):
             self.frequency_shift,
             num_samples_previous_subframe,
             self.pulsed_sampling,
+            self.timing_offset,
         )
-        timing_estimator.offset = self.timing_offset
 
         result, best_grid = timing_estimator.sample(useful_data)
-
-        # while num_symbols_recovered < self.num_symbols:
-        #     # Include more samples to account for the boundary condition of filters.
-        #     begin_extended_subframe = max(
-        #         begin_subframe - num_samples_previous_subframe, 0
-        #     )
-        #     subframe_data = useful_data[begin_extended_subframe:end_subframe].astype(
-        #         np.complex64
-        #     )
-
-        #     logger.info("Shifting quantum data to baseband")
-        #     subframe_data *= shift_up[: len(subframe_data)]
-
-        #     logger.info("Applying RRC filter")
-        #     subframe_data = oaconvolve(subframe_data, rrc_filter, "same")
-
-        #     # Ignore the extra samples at the beginning of the frame
-        #     subframe_data = subframe_data[begin_subframe - begin_extended_subframe :]
-
-        #     logger.info("Finding best decision point")
-        #     if self.symbol_timing_oversampling != 1:
-        #         subframe_data = upsample(
-        #             subframe_data, self.symbol_timing_oversampling, 2
-        #         )
-
-        #     best_grid = timing_estimator.sample(subframe_data)
-
-        #     print(best_grid)
-        #     print(len(best_grid))
-        #     print(len(subframe_data))
-
-        #     logger.info("Downsampling")
-        #     subframe_data = subframe_data[best_grid]
-        #     last_index = (
-        #         begin_subframe + best_grid[-1] / self.symbol_timing_oversampling
-        #     )
-
-        #     logger.info("Collecting %i symbols in the frame", len(subframe_data))
-        #     chunk_length = len(subframe_data) // self.subframe_subdivision
-        #     for i in range(self.subframe_subdivision):
-        #         start = i * chunk_length
-        #         if i != self.subframe_subdivision - 1:
-        #             result.append(subframe_data[start : start + chunk_length])
-        #         else:
-        #             result.append(subframe_data[start:])
-        #     num_symbols_recovered += len(subframe_data)
-
-        #     begin_subframe = int(last_index + sps / 2 - 0.5)
-        #     end_subframe = int(begin_subframe + self.subframe_length * (sps + 1) - 0.5)
-
-        #     if self.debug:
-        #         self.debug_object["uncorrected_data"].append(np.array([]))
 
         # Set parameters for special DSP
         self.special_frequency_shift = self.frequency_shift + f_beat

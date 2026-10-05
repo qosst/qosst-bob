@@ -115,7 +115,7 @@ def offline_dsp(
     logger.info("Applying DSP on elec and elec+shot noise data")
 
     electronic_symbols, electronic_shot_symbols = dsp_obj.special_dsp(
-        electronic_noise_data, electronic_shot_noise_data
+        [electronic_noise_data], [electronic_shot_noise_data]
     )
 
     return quantum_symbols, all_indices, electronic_symbols, electronic_shot_symbols

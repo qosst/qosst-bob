@@ -32,10 +32,6 @@ from scipy.signal import welch
 from qosst_core.dsp.phase_estimator import BasePhaseEstimator
 
 
-# Combined Alice + Bob LO linewidth (Hz), best value found on the test captures
-LINEWIDTH = 300.0
-
-
 class EnhancedUKFPhaseEstimator(BasePhaseEstimator):
     decimation: int = 80
     smooth: bool = True
@@ -65,7 +61,7 @@ class EnhancedUKFPhaseEstimator(BasePhaseEstimator):
         m = self.decimation
         f = self.adc_rate / m
         z, carrier, w = _baseband(pilot_data[0], m)
-        n0, noise_power = _noise_level(shot_noise_data[:len(pilot_data[0])], w, m, f)
+        n0, noise_power = _noise_level(shot_noise_data[: len(pilot_data[0])], w, m, f)
         power = _local_power(z, noise_power, self.amplitude_window)
         z = z / np.sqrt(power)
         weight = power
@@ -86,7 +82,11 @@ class EnhancedUKFPhaseEstimator(BasePhaseEstimator):
             n0 * f / 2 / weight,
             self.smooth,
         )
-        phase = np.interp(np.arange(len(pilot_data[0])), (np.arange(len(phase)) + 0.5) * m - 0.5, phase)
+        phase = np.interp(
+            np.arange(len(pilot_data[0])),
+            (np.arange(len(phase)) + 0.5) * m - 0.5,
+            phase,
+        )
         return phase + carrier
 
 
@@ -152,15 +152,15 @@ def _relative_phase(z: np.ndarray, z2: np.ndarray) -> np.ndarray:
 
 @njit
 def run_phase_ukf_rts(
-        z_real: np.ndarray,
-        z_imag: np.ndarray,
-        Q: float,
-        R: np.ndarray,
-        smooth: bool,
-        alpha: float = 1e-3,
-        beta: float = 2.0,
-        kappa: float = 0.0
-    ) -> np.ndarray:
+    z_real: np.ndarray,
+    z_imag: np.ndarray,
+    Q: float,
+    R: np.ndarray,
+    smooth: bool,
+    alpha: float = 1e-3,
+    beta: float = 2.0,
+    kappa: float = 0.0,
+) -> np.ndarray:
     """
     UKF of the phase of a unit-amplitude pilot, with an optional RTS smoother.
 
@@ -222,6 +222,8 @@ def run_phase_ukf_rts(
 
     if smooth:
         for k in range(N - 2, -1, -1):
-            x_filt[k] = x_filt[k] + P_filt[k] / P_pred[k + 1] * (x_filt[k + 1] - x_filt[k])
+            x_filt[k] = x_filt[k] + P_filt[k] / P_pred[k + 1] * (
+                x_filt[k + 1] - x_filt[k]
+            )
 
     return x_filt

@@ -97,7 +97,6 @@ class BestSamplingPointTimingRecovery(BaseTimingRecoveryEstimator):
 
 
 class StaticTimingRecovery(BaseTimingRecoveryEstimator):
-    offset: float = 10
     initial_sampling_point: float = 13
     resample_epsilon: float = 0.0
 
@@ -115,7 +114,7 @@ class StaticTimingRecovery(BaseTimingRecoveryEstimator):
             frequency_shift=self.frequency_shift,
         )
 
-        # exact float ratio (any offset), same kernel as resample_poly; kept for the special DSP (elec and shot noise)
+        # exact float ratio (any offset); kept for the special DSP (elec and shot noise)
         self.resample_epsilon = self.offset / len(data)
         # fractional part of the initial sampling point as the start of the resampling (exact non-integer timing)
         start = (
@@ -126,7 +125,7 @@ class StaticTimingRecovery(BaseTimingRecoveryEstimator):
         data = fractional_resample(data, self.resample_epsilon, start)
         data *= shift_up[: len(data)]
         data = oaconvolve(data, rrc_filter, "same")
-        if self.symbol_timing_oversampling != 1:  # <-- add this
+        if self.symbol_timing_oversampling != 1:
             data = upsample(data, self.symbol_timing_oversampling, 2)
         best_grid = np.round(
             self.initial_sampling_point

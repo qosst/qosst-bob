@@ -257,17 +257,17 @@ def _upsample_linear_interpolation(data: np.ndarray, upsampling_factor) -> np.nd
 
 
 def fractional_resample(
-        x: np.ndarray,
-        epsilon: float,
-        start: float = 0.0,
-        half_width: int = 10,
-        beta: float = 5.0,
-        grid: int = 4096,
-    ) -> np.ndarray:
+    x: np.ndarray,
+    epsilon: float,
+    start: float = 0.0,
+    half_width: int = 10,
+    beta: float = 10.0,
+    grid: int = 4096,
+) -> np.ndarray:
     """
     Resample data at the positions start + n (1 + epsilon), for a rate ratio close to 1 given exactly (float).
 
-    Same Kaiser-windowed sinc as scipy's resample_poly (unit DC gain, zero padding), evaluated directly at the output
+    Kaiser-windowed sinc as in scipy's resample_poly (unit DC gain, zero padding), evaluated directly at the output
     positions instead of a polyphase filter of 20 max(up, down) taps on a rational approximation of the ratio.
 
     Args:
@@ -275,7 +275,9 @@ def fractional_resample(
         epsilon (float): rate change, the output sample n is taken at the input position start + n (1 + epsilon).
         start (float, optional): position of the first output sample, in input samples. Defaults to 0.
         half_width (int, optional): half width of the windowed sinc, in input samples. Defaults to 10 (as resample_poly).
-        beta (float, optional): beta of the Kaiser window. Defaults to 5 (as resample_poly).
+        beta (float, optional): beta of the Kaiser window. Defaults to 10: the noise gain is flat to 1e-5 up to 0.3 times
+            the sampling rate, whereas beta = 5 (resample_poly) leaves a ripple of ~1e-3 that depends on the frequency,
+            so that the data and the calibration noise, resampled at different frequencies, get different gains.
         grid (int, optional): number of points per input sample of the lookup table of the kernel. Defaults to 4096.
 
     Returns:
@@ -285,15 +287,33 @@ def fractional_resample(
     half = half_width / r
     table = _fractional_kernel_table(r, half, beta, grid)
     n_out = int(np.ceil(len(x) * r))
-    return _fractional_resample(np.ascontiguousarray(x, dtype=np.complex64), n_out, start, 1.0 + epsilon, table,
-                                (len(table) - 1) / 2, half, grid)
+    return _fractional_resample(
+        np.ascontiguousarray(x, dtype=np.complex64),
+        n_out,
+        start,
+        1.0 + epsilon,
+        table,
+        (len(table) - 1) / 2,
+        half,
+        grid,
+    )
 
 
-def _fractional_kernel_table(r: float, half: float, beta: float, grid: int) -> np.ndarray:
+def _fractional_kernel_table(
+    r: float, half: float, beta: float, grid: int
+) -> np.ndarray:
     """Kernel r sinc(r tau) kaiser(tau) on tau = k / grid, |tau| <= half, normalised to unit area."""
-    tau = np.arange(-int(np.ceil(half * grid)) - 2, int(np.ceil(half * grid)) + 3) / grid
+    tau = (
+        np.arange(-int(np.ceil(half * grid)) - 2, int(np.ceil(half * grid)) + 3) / grid
+    )
     arg = np.clip(1 - (tau / half) ** 2, 0, None)
-    g = r * np.sinc(r * tau) * i0(beta * np.sqrt(arg)) / i0(beta) * (np.abs(tau) <= half)
+    g = (
+        r
+        * np.sinc(r * tau)
+        * i0(beta * np.sqrt(arg))
+        / i0(beta)
+        * (np.abs(tau) <= half)
+    )
     return g / (np.sum(g) / grid)
 
 
